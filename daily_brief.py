@@ -61,7 +61,7 @@ def main():
         CARRY_TRADE_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
         "\n\nCURRENT PRICE DATA (use ONLY these numbers if you reference price at all):\n" +
         price_block +
-        "\n\nPIN-BAR 61.8% SETUP CHECK (a specific, already-decided trading rule - see "
+        "\n\nPIN-BAR LEVEL SETUP CHECK (a specific, already-decided trading rule - see "
         "instructions in DIRECTIONAL VIEW above for how to use this):\n" +
         setup_note +
         "\n\nHere are today's raw headline pulls on Fed policy, BOJ/yen intervention, "
