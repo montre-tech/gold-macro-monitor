@@ -76,24 +76,37 @@ def escape_html(s):
     return html.escape(str(s), quote=False)
 
 
-def ask_gemini(prompt):
-    """Calls the Gemini free-tier API. Model name is read from GEMINI_MODEL env var so it
-    can be updated in one place (a GitHub Actions repo variable) if Google renames it again."""
+import time
+
+def ask_gemini(prompt, max_retries=3):
     api_key = os.environ["GEMINI_API_KEY"]
     model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    try:
-        resp = requests.post(url, params={"key": api_key}, json=payload, timeout=60)
-        data = resp.json()
-    except requests.RequestException as e:
-        return f"[Gemini request failed: {e}]"
-    if "error" in data:
-        return f"[Gemini error: {data['error'].get('message')}]"
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        return f"[Could not parse Gemini response: {str(data)[:500]}]"
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(url, params={"key": api_key}, json=payload, timeout=60)
+            data = resp.json()
+        except requests.RequestException as e:
+            last_error = f"[Gemini request failed: {e}]"
+            data = None
+        if data is not None:
+            if "error" not in data:
+                try:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    last_error = f"[Could not parse Gemini response: {str(data)[:500]}]"
+            else:
+                msg = data["error"].get("message", "")
+                last_error = f"[Gemini error: {msg}]"
+                if "high demand" not in msg.lower() and "overloaded" not in msg.lower():
+                    break  # a real error, not just overload - no point retrying
+        if attempt < max_retries:
+            wait = 20 * attempt  # 20s, 40s
+            print(f"Attempt {attempt} failed ({last_error}). Retrying in {wait}s...")
+            time.sleep(wait)
+    return last_error
 
 
 def parse_sections(text):
