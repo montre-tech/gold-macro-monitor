@@ -26,6 +26,7 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
 
       - name: Publish updated brief
         run: |
