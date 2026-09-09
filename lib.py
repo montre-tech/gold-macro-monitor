@@ -45,7 +45,11 @@ ANALYSIS_STYLE_GUIDE = (
     "(nominal rates minus inflation expectations), since that is the dominant driver of gold.\n"
     "3. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold "
     "over the next 1-2 weeks, with a rough confidence level (low/medium/high) and the single "
-    "biggest reason for that lean.\n"
+    "biggest reason for that lean. You are also given a PIN-BAR 61.8% SETUP CHECK below, which "
+    "is a specific, already-decided trading rule (not something for you to re-derive) - if it "
+    "says a setup is currently active, you MUST explicitly state its confirmation/rejection "
+    "verdict and weave it into your near-term view; if it says no setup is active, say so "
+    "explicitly rather than inventing one.\n"
     "4. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction "
     "(e.g. if you lean bearish, give the honest bull case) and then explain specifically why "
     "the current data does not make that the higher-probability outcome right now. If the data "
@@ -228,7 +232,7 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
 </body></html>"""
 
 
-def fetch_gold_price_context():
+def fetch_gold_price_data():
     """
     Fetches current gold price and yesterday's completed daily OHLC from Yahoo
     Finance's public chart endpoint (no key needed), then computes Fibonacci
@@ -238,6 +242,9 @@ def fetch_gold_price_context():
     LOWER wick (candle body bottom -> day's low). This mirrors
     Fib_DrawPinZones() in the EA, applied to the most recent completed daily
     candle ("yesterday's pin bar").
+
+    Returns a dict of structured values (used both for display and for the
+    61.8% setup-check math below), or None if the fetch/parse fails.
 
     Caveats, on purpose:
     - Unofficial Yahoo endpoint - if it changes/blocks, this returns None and
@@ -285,30 +292,179 @@ def fetch_gold_price_context():
                 ("100%", hundred_price),
             ]
 
-        upper_pin_fib = fib_set(body_top, y["high"])    # upper wick
-        lower_pin_fib = fib_set(body_bottom, y["low"])  # lower wick
-
-        yesterday_date = datetime.datetime.utcfromtimestamp(y["ts"]).strftime("%b %d, %Y")
-
-        lines = [
-            f"Current gold price (XAUUSD): ${current_price:,.2f}",
-            f"Yesterday's ({yesterday_date}) candle: Open ${y['open']:,.2f} / High ${y['high']:,.2f} "
-            f"/ Low ${y['low']:,.2f} / Close ${y['close']:,.2f}",
-            f"Yesterday's candle body: top ${body_top:,.2f} / bottom ${body_bottom:,.2f}",
-            "",
-            "UPPER PIN ZONE Fibonacci (body top -> day's high, the upper wick):",
-        ]
-        for label, level in upper_pin_fib:
-            lines.append(f"  {label}: ${level:,.2f}")
-        lines.append("")
-        lines.append("LOWER PIN ZONE Fibonacci (body bottom -> day's low, the lower wick):")
-        for label, level in lower_pin_fib:
-            lines.append(f"  {label}: ${level:,.2f}")
-
-        return "\n".join(lines)
+        return {
+            "current_price": current_price,
+            "yesterday_date": datetime.datetime.utcfromtimestamp(y["ts"]).strftime("%b %d, %Y"),
+            "open": y["open"], "high": y["high"], "low": y["low"], "close": y["close"],
+            "body_top": body_top, "body_bottom": body_bottom,
+            "upper_pin_fib": fib_set(body_top, y["high"]),      # upper wick
+            "lower_pin_fib": fib_set(body_bottom, y["low"]),    # lower wick
+        }
     except Exception as e:
         print(f"Price fetch failed: {e}")
         return None
+
+
+def format_price_context(pd_):
+    """Turns the structured dict from fetch_gold_price_data() into the human/prompt-readable
+    text block. Kept separate from fetching so the same structured data can also feed the
+    61.8% setup-check math without re-parsing text."""
+    lines = [
+        f"Current gold price (XAUUSD): ${pd_['current_price']:,.2f}",
+        f"Yesterday's ({pd_['yesterday_date']}) candle: Open ${pd_['open']:,.2f} / High ${pd_['high']:,.2f} "
+        f"/ Low ${pd_['low']:,.2f} / Close ${pd_['close']:,.2f}",
+        f"Yesterday's candle body: top ${pd_['body_top']:,.2f} / bottom ${pd_['body_bottom']:,.2f}",
+        "",
+        "UPPER PIN ZONE Fibonacci (body top -> day's high, the upper wick):",
+    ]
+    for label, level in pd_["upper_pin_fib"]:
+        lines.append(f"  {label}: ${level:,.2f}")
+    lines.append("")
+    lines.append("LOWER PIN ZONE Fibonacci (body bottom -> day's low, the lower wick):")
+    for label, level in pd_["lower_pin_fib"]:
+        lines.append(f"  {label}: ${level:,.2f}")
+    return "\n".join(lines)
+
+
+def fetch_recent_30m_close():
+    """
+    Fetches the most recently CLOSED 30-minute candle's close price for XAUUSD
+    (the second-to-last bar returned, since the last one is usually still
+    forming). Used to confirm or reject the pin-bar 61.8% setup below.
+    Returns {"close": float, "time_label": str} or None if unavailable.
+    """
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
+        params = {"interval": "30m", "range": "2d"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, params=params, headers=headers, timeout=20)
+        data = resp.json()
+        result = data["chart"]["result"][0]
+        quote = result["indicators"]["quote"][0]
+        timestamps = result["timestamp"]
+        closes = quote["close"]
+
+        candles = [(timestamps[i], closes[i]) for i in range(len(timestamps)) if closes[i] is not None]
+        if len(candles) < 2:
+            return None
+        ts, close_price = candles[-2]  # last fully closed 30-minute bar
+        return {
+            "close": close_price,
+            "time_label": datetime.datetime.utcfromtimestamp(ts).strftime("%H:%M UTC"),
+        }
+    except Exception as e:
+        print(f"30-minute candle fetch failed: {e}")
+        return None
+
+
+def build_pin_bar_setup_note(pd_, recent_30m):
+    """
+    Applies the specific 61.8% pin-bar rule directly in code (not left for the
+    model to compute, since exact price-vs-level comparison must be reliable):
+
+    - If current price is sitting near the LOWER pin zone's 61.8% level, that's
+      a potential support/reversal point. The most recently closed 30-minute
+      candle's close decides which way: closing back ABOVE 61.8% favors a BUY
+      (bounce/rejection of further downside); closing BELOW it favors
+      downside continuation instead.
+    - Symmetric logic for the UPPER pin zone's 61.8% level: closing BELOW it
+      favors a SELL (rejection from resistance); closing ABOVE it favors
+      upside continuation (breakout) instead.
+
+    "Near" is defined as within 25% of that wick's own range from the 61.8%
+    level - this scales with volatility instead of using a fixed dollar amount.
+    """
+
+    def get_level(fib_list, label):
+        for l, v in fib_list:
+            if l == label:
+                return v
+        return None
+
+    current_price = pd_["current_price"]
+    lower_618 = get_level(pd_["lower_pin_fib"], "61.8%")
+    lower_0 = get_level(pd_["lower_pin_fib"], "0%")
+    lower_100 = get_level(pd_["lower_pin_fib"], "100%")
+    upper_618 = get_level(pd_["upper_pin_fib"], "61.8%")
+    upper_0 = get_level(pd_["upper_pin_fib"], "0%")
+    upper_100 = get_level(pd_["upper_pin_fib"], "100%")
+
+    lower_range = abs(lower_100 - lower_0)
+    upper_range = abs(upper_100 - upper_0)
+    threshold_lower = 0.25 * lower_range
+    threshold_upper = 0.25 * upper_range
+
+    dist_to_lower = abs(current_price - lower_618)
+    dist_to_upper = abs(current_price - upper_618)
+
+    near_lower = dist_to_lower <= threshold_lower
+    near_upper = dist_to_upper <= threshold_upper
+
+    if not near_lower and not near_upper:
+        if dist_to_lower <= dist_to_upper:
+            nearest_label, nearest_level, nearest_dist = "LOWER pin zone", lower_618, dist_to_lower
+        else:
+            nearest_label, nearest_level, nearest_dist = "UPPER pin zone", upper_618, dist_to_upper
+        return (
+            f"Current price (${current_price:,.2f}) is NOT currently near either pin bar's 61.8% "
+            f"level. Nearest is the {nearest_label} 61.8% at ${nearest_level:,.2f} "
+            f"(${nearest_dist:,.2f} away). The 61.8% reversal/continuation setup does not apply "
+            f"right now - do not force a setup narrative onto the direction."
+        )
+
+    close_price = recent_30m["close"] if recent_30m else None
+    close_time = recent_30m["time_label"] if recent_30m else None
+    lines = []
+
+    if near_lower:
+        lines.append(
+            f"Current price (${current_price:,.2f}) is sitting near the LOWER PIN ZONE 61.8% "
+            f"level (${lower_618:,.2f}) - a potential support/reversal trigger."
+        )
+        if close_price is not None:
+            if close_price > lower_618:
+                lines.append(
+                    f"The most recently closed 30-minute candle ({close_time}) closed at "
+                    f"${close_price:,.2f}, ABOVE the 61.8% level - per the rule, this favors a "
+                    f"BUY (bounce off support)."
+                )
+            else:
+                lines.append(
+                    f"The most recently closed 30-minute candle ({close_time}) closed at "
+                    f"${close_price:,.2f}, BELOW the 61.8% level - per the rule, this favors "
+                    f"DOWNSIDE CONTINUATION, not a buy."
+                )
+        else:
+            lines.append(
+                "30-minute candle data was unavailable this run, so the confirmation cannot be "
+                "confirmed - flag this as an unconfirmed setup rather than asserting a direction."
+            )
+
+    if near_upper:
+        lines.append(
+            f"Current price (${current_price:,.2f}) is sitting near the UPPER PIN ZONE 61.8% "
+            f"level (${upper_618:,.2f}) - a potential resistance/reversal trigger."
+        )
+        if close_price is not None:
+            if close_price < upper_618:
+                lines.append(
+                    f"The most recently closed 30-minute candle ({close_time}) closed at "
+                    f"${close_price:,.2f}, BELOW the 61.8% level - per the rule, this favors a "
+                    f"SELL (rejection from resistance)."
+                )
+            else:
+                lines.append(
+                    f"The most recently closed 30-minute candle ({close_time}) closed at "
+                    f"${close_price:,.2f}, ABOVE the 61.8% level - per the rule, this favors "
+                    f"UPSIDE CONTINUATION (breakout), not a sell."
+                )
+        else:
+            lines.append(
+                "30-minute candle data was unavailable this run, so the confirmation cannot be "
+                "confirmed - flag this as an unconfirmed setup rather than asserting a direction."
+            )
+
+    return "\n".join(lines)
 
 
 def maybe_send_email(subject, plain_text, html_body):
