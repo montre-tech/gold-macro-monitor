@@ -2,15 +2,17 @@
 Shared helpers for the Gold & Macro Monitor scripts.
 Mirrors the logic from the Google Apps Script version, ported to Python.
 """
+import datetime
 import html
 import os
 import re
 import smtplib
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
-import time
+
 FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
 CARRY_TRADE_FRAMEWORK = (
@@ -53,7 +55,12 @@ ANALYSIS_STYLE_GUIDE = (
     "5. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
     "Keep the whole thing under 450 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
-    "a decision, not investment advice, and you can note that briefly at the end."
+    "a decision, not investment advice, and you can note that briefly at the end.\n\n"
+    "CRITICAL PRICE RULE: only reference the exact current price and Fibonacci levels given to "
+    "you explicitly in the CURRENT PRICE DATA section below - never invent, round differently, "
+    "or state any other specific price level. If that section says price data is unavailable, "
+    "do not state any specific price or price range at all - describe direction only in "
+    "relative terms (e.g. 'further downside pressure from current levels')."
 )
 
 SECTION_HEADERS = [
@@ -77,18 +84,23 @@ def escape_html(s):
 
 
 def ask_gemini(prompt, max_retries=3):
+    """Calls the Gemini free-tier API. Model name is read from GEMINI_MODEL env var (falls
+    back to the default whether the var is unset OR set-but-empty) so it can be overridden
+    via a GitHub secret without touching code. Retries automatically on transient
+    "high demand" / overload errors, since those usually clear up within seconds."""
     api_key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+    model = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     last_error = None
     for attempt in range(1, max_retries + 1):
+        data = None
         try:
             resp = requests.post(url, params={"key": api_key}, json=payload, timeout=60)
             data = resp.json()
         except requests.RequestException as e:
             last_error = f"[Gemini request failed: {e}]"
-            data = None
+
         if data is not None:
             if "error" not in data:
                 try:
@@ -100,8 +112,9 @@ def ask_gemini(prompt, max_retries=3):
                 last_error = f"[Gemini error: {msg}]"
                 if "high demand" not in msg.lower() and "overloaded" not in msg.lower():
                     break  # a real error, not just overload - no point retrying
+
         if attempt < max_retries:
-            wait = 20 * attempt  # 20s, 40s
+            wait = 20 * attempt
             print(f"Attempt {attempt} failed ({last_error}). Retrying in {wait}s...")
             time.sleep(wait)
     return last_error
@@ -213,6 +226,89 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
   </div>
 </div>
 </body></html>"""
+
+
+def fetch_gold_price_context():
+    """
+    Fetches current gold price and yesterday's completed daily OHLC from Yahoo
+    Finance's public chart endpoint (no key needed), then computes Fibonacci
+    levels the way the MT4 EA's Pin Zone logic does (FIB_PIN_BOTH) - NOT a
+    plain high-to-low retracement, but two separate Fibonacci sets measured
+    across each wick: the UPPER wick (candle body top -> day's high) and the
+    LOWER wick (candle body bottom -> day's low). This mirrors
+    Fib_DrawPinZones() in the EA, applied to the most recent completed daily
+    candle ("yesterday's pin bar").
+
+    Caveats, on purpose:
+    - Unofficial Yahoo endpoint - if it changes/blocks, this returns None and
+      the prompt is told to state no specific price at all.
+    - "Yesterday" = Yahoo's daily bar boundary, which may not exactly match
+      your broker's session close time in MT4 - a close approximation, not a
+      pixel-exact match to your EA's own reading.
+    """
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
+        params = {"interval": "1d", "range": "10d"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, params=params, headers=headers, timeout=20)
+        data = resp.json()
+        result = data["chart"]["result"][0]
+        quote = result["indicators"]["quote"][0]
+        timestamps = result["timestamp"]
+        opens, highs, lows, closes = quote["open"], quote["high"], quote["low"], quote["close"]
+
+        candles = []
+        for i in range(len(timestamps)):
+            if None not in (opens[i], highs[i], lows[i], closes[i]):
+                candles.append({
+                    "ts": timestamps[i], "open": opens[i], "high": highs[i],
+                    "low": lows[i], "close": closes[i],
+                })
+
+        if len(candles) < 2:
+            return None
+
+        current_price = result.get("meta", {}).get("regularMarketPrice", candles[-1]["close"])
+        y = candles[-2]  # last fully completed daily bar before today's in-progress one
+        body_top = max(y["open"], y["close"])
+        body_bottom = min(y["open"], y["close"])
+
+        def fib_set(zero_price, hundred_price):
+            rng = hundred_price - zero_price
+            return [
+                ("0%", zero_price),
+                ("23.6%", zero_price + rng * 0.236),
+                ("38.2%", zero_price + rng * 0.382),
+                ("50%", zero_price + rng * 0.5),
+                ("61.8%", zero_price + rng * 0.618),
+                ("78.6%", zero_price + rng * 0.786),
+                ("100%", hundred_price),
+            ]
+
+        upper_pin_fib = fib_set(body_top, y["high"])    # upper wick
+        lower_pin_fib = fib_set(body_bottom, y["low"])  # lower wick
+
+        yesterday_date = datetime.datetime.utcfromtimestamp(y["ts"]).strftime("%b %d, %Y")
+
+        lines = [
+            f"Current gold price (XAUUSD): ${current_price:,.2f}",
+            f"Yesterday's ({yesterday_date}) candle: Open ${y['open']:,.2f} / High ${y['high']:,.2f} "
+            f"/ Low ${y['low']:,.2f} / Close ${y['close']:,.2f}",
+            f"Yesterday's candle body: top ${body_top:,.2f} / bottom ${body_bottom:,.2f}",
+            "",
+            "UPPER PIN ZONE Fibonacci (body top -> day's high, the upper wick):",
+        ]
+        for label, level in upper_pin_fib:
+            lines.append(f"  {label}: ${level:,.2f}")
+        lines.append("")
+        lines.append("LOWER PIN ZONE Fibonacci (body bottom -> day's low, the lower wick):")
+        for label, level in lower_pin_fib:
+            lines.append(f"  {label}: ${level:,.2f}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"Price fetch failed: {e}")
+        return None
 
 
 def maybe_send_email(subject, plain_text, html_body):
