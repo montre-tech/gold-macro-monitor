@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
-
+import time
 FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
 CARRY_TRADE_FRAMEWORK = (
@@ -75,8 +75,6 @@ SECTION_META = {
 def escape_html(s):
     return html.escape(str(s), quote=False)
 
-
-import time
 
 def ask_gemini(prompt, max_retries=3):
     api_key = os.environ["GEMINI_API_KEY"]
