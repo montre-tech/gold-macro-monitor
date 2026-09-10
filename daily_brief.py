@@ -84,13 +84,22 @@ def main():
             + escape_html(setup_note) + "</div>"
         )
 
-    html_out = build_newsletter_html("Daily Gold / Macro Brief", date_str, sections, analysis, data_box_html)
+    html_out = build_newsletter_html(
+        "Daily Gold / Macro Brief", date_str, sections, analysis, data_box_html,
+        nav_links=[("Weekly COT →", "weekly.html"), ("Archive", "archive/"), ("Home", "index.html")],
+    )
+    # Archive copies live one folder deeper (docs/archive/), so their nav links need
+    # a "../" prefix to point back to the top-level pages correctly.
+    html_out_archived = build_newsletter_html(
+        "Daily Gold / Macro Brief", date_str, sections, analysis, data_box_html,
+        nav_links=[("Weekly COT →", "../weekly.html"), ("Archive", "."), ("Home", "../index.html")],
+    )
 
     os.makedirs("docs/archive", exist_ok=True)
     with open("docs/daily.html", "w", encoding="utf-8") as f:
         f.write(html_out)
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
-        f.write(html_out)
+        f.write(html_out_archived)
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
 
