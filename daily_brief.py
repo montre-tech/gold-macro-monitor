@@ -22,6 +22,8 @@ from lib import (
     format_price_context,
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
+    fetch_economic_calendar,
+    format_calendar_context,
     escape_html,
 )
 
@@ -57,6 +59,9 @@ def main():
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
 
+    calendar_events = fetch_economic_calendar()
+    calendar_block = format_calendar_context(calendar_events)
+
     prompt = (
         CARRY_TRADE_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
         "\n\nCURRENT PRICE DATA (use ONLY these numbers if you reference price at all):\n" +
@@ -64,6 +69,9 @@ def main():
         "\n\nPIN-BAR LEVEL SETUP CHECK (a specific, already-decided trading rule - see "
         "instructions in DIRECTIONAL VIEW above for how to use this):\n" +
         setup_note +
+        "\n\nECONOMIC CALENDAR DATA (see instructions in ECONOMIC CALENDAR & POSITIONING "
+        "above for how to use this):\n" +
+        calendar_block +
         "\n\nHere are today's raw headline pulls on Fed policy, BOJ/yen intervention, "
         "gold, and rate-hike odds coverage. Some headlines may be repetitive or low-value - "
         "ignore those and focus on what is actually new or market-moving:" + news_block
@@ -80,8 +88,11 @@ def main():
             'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:8px;">'
             + escape_html(price_block) + "</div>"
             '<div style="font-family:monospace;font-size:12px;color:#444;background:#eef6ff;'
-            'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
+            'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:8px;">'
             + escape_html(setup_note) + "</div>"
+            '<div style="font-family:monospace;font-size:12px;color:#444;background:#fff8e1;'
+            'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
+            + escape_html(calendar_block) + "</div>"
         )
 
     html_out = build_newsletter_html(
