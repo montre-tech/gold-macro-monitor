@@ -510,14 +510,21 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     return "\n".join(lines)
 
 
+DISPLAY_TZ_OFFSET_HOURS = 3  # GMT+3 - change this one number if you trade from a different timezone
+DISPLAY_TZ_LABEL = "GMT+3"
+
+
 def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     """
     Fetches this week's economic calendar from Forex Factory's public export
     feed - the same free, key-less JSON feed countless MT4/MT5 news-filter
     EAs use, updated with actual figures as events release throughout the day.
 
-    Filters down to TODAY's events for the given currencies at Medium/High
-    impact, and splits them into two buckets the prompt treats differently:
+    Filters down to TODAY's events (today defined in DISPLAY_TZ_OFFSET_HOURS,
+    not UTC - a naive UTC-string-prefix match was fragile right around
+    midnight and could silently drop events) for the given currencies at
+    Medium/High impact, and splits them into two buckets the prompt treats
+    differently:
     - released: events with an "actual" figure already reported
     - upcoming: events later today with no "actual" figure yet
 
@@ -526,7 +533,9 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     day scheduled job, but don't call this on every tick/run of anything more
     frequent than that.
 
-    Returns a list of event dicts, or None if the fetch/parse fails.
+    Returns a list of event dicts, or None if the fetch/parse fails. Prints a
+    diagnostic count of total-vs-filtered events either way, so a "missing
+    event" report can be diagnosed from the Actions log instead of guessing.
     """
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -543,11 +552,14 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
         print(f"Economic calendar fetch failed: {e}")
         return None
 
+    display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+    today_display_date = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz).date()
+
     impact_rank = {"Low": 0, "Medium": 1, "High": 2}
     min_rank = impact_rank.get(min_impact, 1)
-    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
 
     results = []
+    skipped_unparsed = 0
     for ev in events:
         try:
             country = ev.get("country", "")
@@ -556,14 +568,25 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
             impact = ev.get("impact", "Low")
             if impact_rank.get(impact, 0) < min_rank:
                 continue
-            date_str = ev.get("date", "") or ""
-            if not date_str.startswith(today_str):
+
+            raw_date = ev.get("date", "") or ""
+            try:
+                event_dt = datetime.datetime.fromisoformat(raw_date)
+            except ValueError:
+                skipped_unparsed += 1
                 continue
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=datetime.timezone.utc)
+            event_dt_display = event_dt.astimezone(display_tz)
+
+            if event_dt_display.date() != today_display_date:
+                continue
+
             actual = (ev.get("actual") or "").strip()
             results.append({
                 "title": ev.get("title", "Unknown event"),
                 "country": country,
-                "date": date_str,
+                "time_label": event_dt_display.strftime("%H:%M") + f" {DISPLAY_TZ_LABEL}",
                 "impact": impact,
                 "forecast": (ev.get("forecast") or "").strip() or "n/a",
                 "previous": (ev.get("previous") or "").strip() or "n/a",
@@ -573,35 +596,40 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
         except Exception:
             continue
 
+    print(
+        f"Economic calendar: fetched {len(events)} total events, {len(results)} passed "
+        f"filters for today ({DISPLAY_TZ_LABEL}); {skipped_unparsed} had unparseable dates."
+    )
     return results
 
 
 def format_calendar_context(events):
     """Turns the list from fetch_economic_calendar() into the prompt/display text,
-    clearly separating already-released events from ones still to come today."""
+    clearly separating already-released events from ones still to come today,
+    with every time labeled in DISPLAY_TZ_LABEL so it's unambiguous to the reader."""
     if events is None:
         return "Economic calendar data unavailable this run - do not invent any scheduled events."
     if not events:
-        return "No Medium/High-impact USD or JPY events scheduled for today."
+        return f"No Medium/High-impact USD or JPY events scheduled for today ({DISPLAY_TZ_LABEL})."
 
     released = [e for e in events if e["released"]]
     upcoming = [e for e in events if not e["released"]]
 
-    lines = []
+    lines = [f"(All times below are in {DISPLAY_TZ_LABEL}.)"]
     if released:
+        lines.append("")
         lines.append("ALREADY RELEASED TODAY:")
         for e in released:
             lines.append(
-                f"  - [{e['country']}, {e['impact']} impact] {e['title']} - "
+                f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Actual: {e['actual']} | Forecast: {e['forecast']} | Previous: {e['previous']}"
             )
     if upcoming:
-        if lines:
-            lines.append("")
+        lines.append("")
         lines.append("NOT YET RELEASED TODAY:")
         for e in upcoming:
             lines.append(
-                f"  - [{e['country']}, {e['impact']} impact] {e['title']} at {e['date']} - "
+                f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Forecast: {e['forecast']} | Previous: {e['previous']}"
             )
     return "\n".join(lines)
