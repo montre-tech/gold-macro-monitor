@@ -56,15 +56,18 @@ ANALYSIS_STYLE_GUIDE = (
     "shows a retracement or pullback, explicitly address whether that looks like a genuine trend "
     "reversal or a normal corrective move within a larger trend, and justify which one using the "
     "specific numbers given - do not just assert \"it is just a pullback\" without reasoning.\n"
-    "5. ECONOMIC CALENDAR & POSITIONING - using the ECONOMIC CALENDAR DATA given below: for each "
-    "event marked ALREADY RELEASED, state whether the actual figure beat, met, or missed forecast "
-    "and what that implies for rate-hike odds, the dollar, real yields, and gold specifically - "
-    "do not just restate the numbers, interpret them. For each event marked NOT YET RELEASED, "
-    "state what a beat vs. a miss would each imply, and give a concrete positioning "
-    "recommendation for going into that release (e.g. reduce size beforehand, avoid opening new "
-    "positions right before a High-impact print, wait for confirmation after) that ties back to "
-    "the DIRECTIONAL VIEW and PIN-BAR setup above. If the calendar data says unavailable or empty, "
-    "say so explicitly rather than inventing an event.\n"
+    "5. ECONOMIC CALENDAR & POSITIONING - using the ECONOMIC CALENDAR DATA given below, which "
+    "has three possible buckets: (a) events with a confirmed actual figure - state whether it "
+    "beat, met, or missed forecast and what that implies for rate-hike odds, the dollar, real "
+    "yields, and gold specifically, don't just restate the numbers, interpret them; (b) events "
+    "whose scheduled time has already passed but this feed has no actual figure yet - these DID "
+    "happen, so treat them as released, not upcoming, and check the news headlines below for the "
+    "real figure if they mention it, otherwise say the outcome is not yet confirmed rather than "
+    "inventing a number; (c) events still ahead today - state what a beat vs. a miss would each "
+    "imply, and give a concrete positioning recommendation going into that release (e.g. reduce "
+    "size beforehand, avoid opening new positions right before a High-impact print, wait for "
+    "confirmation after) tied back to the DIRECTIONAL VIEW and PIN-BAR setup above. If the "
+    "calendar data says unavailable or empty, say so explicitly rather than inventing an event.\n"
     "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
     "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
@@ -518,15 +521,22 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     """
     Fetches this week's economic calendar from Forex Factory's public export
     feed - the same free, key-less JSON feed countless MT4/MT5 news-filter
-    EAs use, updated with actual figures as events release throughout the day.
+    EAs use.
 
     Filters down to TODAY's events (today defined in DISPLAY_TZ_OFFSET_HOURS,
     not UTC - a naive UTC-string-prefix match was fragile right around
     midnight and could silently drop events) for the given currencies at
-    Medium/High impact, and splits them into two buckets the prompt treats
-    differently:
-    - released: events with an "actual" figure already reported
-    - upcoming: events later today with no "actual" figure yet
+    Medium/High impact, and classifies each into one of three buckets using
+    TWO independent signals rather than trusting FF's "actual" field alone
+    (that field does not reliably populate promptly on this feed, which is
+    exactly what caused events released hours earlier to still show as
+    "upcoming"):
+    - released: actual figure IS populated - the clean, fully-confirmed case.
+    - released_no_actual: scheduled time has already passed (with a 10-minute
+      buffer) but FF hasn't populated an actual figure - the event DID happen,
+      we just don't have FF's printed number for it. The prompt is told to
+      cross-check the news headlines block for the real figure if possible.
+    - upcoming: scheduled time is still in the future.
 
     Rate limit note (from Forex Factory's own guidance): this feed is limited
     to roughly 2 requests per 5 minutes per IP - completely fine for a once-a-
@@ -553,7 +563,9 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
         return None
 
     display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
-    today_display_date = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz).date()
+    now_display = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz)
+    today_display_date = now_display.date()
+    occurred_buffer = datetime.timedelta(minutes=10)
 
     impact_rank = {"Low": 0, "Medium": 1, "High": 2}
     min_rank = impact_rank.get(min_impact, 1)
@@ -583,6 +595,16 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
                 continue
 
             actual = (ev.get("actual") or "").strip()
+            has_actual = bool(actual)
+            time_passed = (now_display - event_dt_display) >= occurred_buffer
+
+            if has_actual:
+                status = "released"
+            elif time_passed:
+                status = "released_no_actual"
+            else:
+                status = "upcoming"
+
             results.append({
                 "title": ev.get("title", "Unknown event"),
                 "country": country,
@@ -591,7 +613,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
                 "forecast": (ev.get("forecast") or "").strip() or "n/a",
                 "previous": (ev.get("previous") or "").strip() or "n/a",
                 "actual": actual or None,
-                "released": bool(actual),
+                "status": status,
             })
         except Exception:
             continue
@@ -605,24 +627,37 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
 
 def format_calendar_context(events):
     """Turns the list from fetch_economic_calendar() into the prompt/display text,
-    clearly separating already-released events from ones still to come today,
-    with every time labeled in DISPLAY_TZ_LABEL so it's unambiguous to the reader."""
+    with three clearly separated buckets and every time labeled in
+    DISPLAY_TZ_LABEL so it's unambiguous to the reader."""
     if events is None:
         return "Economic calendar data unavailable this run - do not invent any scheduled events."
     if not events:
         return f"No Medium/High-impact USD or JPY events scheduled for today ({DISPLAY_TZ_LABEL})."
 
-    released = [e for e in events if e["released"]]
-    upcoming = [e for e in events if not e["released"]]
+    released = [e for e in events if e["status"] == "released"]
+    released_no_actual = [e for e in events if e["status"] == "released_no_actual"]
+    upcoming = [e for e in events if e["status"] == "upcoming"]
 
     lines = [f"(All times below are in {DISPLAY_TZ_LABEL}.)"]
     if released:
         lines.append("")
-        lines.append("ALREADY RELEASED TODAY:")
+        lines.append("ALREADY RELEASED TODAY (actual figure confirmed):")
         for e in released:
             lines.append(
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Actual: {e['actual']} | Forecast: {e['forecast']} | Previous: {e['previous']}"
+            )
+    if released_no_actual:
+        lines.append("")
+        lines.append(
+            "ALREADY RELEASED TODAY (scheduled time has passed, but this feed hasn't posted "
+            "the actual figure yet - check the news headlines below for the real number if "
+            "possible, and treat this as having happened, not as still upcoming):"
+        )
+        for e in released_no_actual:
+            lines.append(
+                f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
+                f"Forecast: {e['forecast']} | Previous: {e['previous']} | Actual: not reported by this feed"
             )
     if upcoming:
         lines.append("")
