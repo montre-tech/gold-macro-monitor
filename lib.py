@@ -257,7 +257,7 @@ def _yahoo_chart_fetch(interval, range_):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     last_err = None
     for host in hosts:
-        url = f"https://{host}/v8/finance/chart/XAUUSD=X"
+        url = f"https://{host}/v8/finance/chart/GC=F"
         try:
             resp = requests.get(url, params={"interval": interval, "range": range_}, headers=headers, timeout=20)
             if resp.status_code != 200:
@@ -354,7 +354,7 @@ def format_price_context(pd_):
     text block. Kept separate from fetching so the same structured data can also feed the
     61.8% setup-check math without re-parsing text."""
     lines = [
-        f"Current gold price (XAUUSD): ${pd_['current_price']:,.2f}",
+        f"Current gold price (COMEX GC futures, close proxy for spot): ${pd_['current_price']:,.2f}",
         f"Yesterday's ({pd_['yesterday_date']}) candle: Open ${pd_['open']:,.2f} / High ${pd_['high']:,.2f} "
         f"/ Low ${pd_['low']:,.2f} / Close ${pd_['close']:,.2f}",
         f"Yesterday's candle body: top ${pd_['body_top']:,.2f} / bottom ${pd_['body_bottom']:,.2f}",
@@ -372,7 +372,7 @@ def format_price_context(pd_):
 
 def fetch_recent_30m_close():
     """
-    Fetches the most recently CLOSED 30-minute candle's close price for XAUUSD
+    Fetches the most recently CLOSED 30-minute candle's close price for COMEX gold futures
     (the second-to-last bar returned, since the last one is usually still
     forming). Used to confirm or reject the pin-bar 61.8% setup below.
     Returns {"close": float, "time_label": str} or None if unavailable.
