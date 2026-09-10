@@ -320,7 +320,20 @@ def fetch_gold_price_data():
             return None
 
         current_price = result.get("meta", {}).get("regularMarketPrice", candles[-1]["close"])
-        y = candles[-2]  # last fully completed daily bar before today's in-progress one
+
+        # Walk backward from the second-to-last candle to find the last one that's
+        # actually valid (high != low). Futures data occasionally includes flat/
+        # degenerate placeholder bars (e.g. thin-liquidity weekend rollover ticks)
+        # where open=high=low=close - blindly using candles[-2] picked one of these
+        # once, which collapsed every Fibonacci level to the same price.
+        y = None
+        for candidate in reversed(candles[:-1]):  # skip the still-forming last candle
+            if candidate["high"] > candidate["low"]:
+                y = candidate
+                break
+        if y is None:
+            return None
+
         body_top = max(y["open"], y["close"])
         body_bottom = min(y["open"], y["close"])
 
@@ -349,24 +362,31 @@ def fetch_gold_price_data():
         return None
 
 
+DISPLAY_FIB_LEVELS = ("50%", "61.8%", "78.6%")
+
+
 def format_price_context(pd_):
     """Turns the structured dict from fetch_gold_price_data() into the human/prompt-readable
     text block. Kept separate from fetching so the same structured data can also feed the
-    61.8% setup-check math without re-parsing text."""
+    setup-check math without re-parsing text. Only shows the 50/61.8/78.6% levels to keep
+    the report focused - the 0/23.6/38.2/100% anchors are still used internally (in
+    fetch_gold_price_data and build_pin_bar_setup_note) but not surfaced here. The candle
+    body (open/close) is used internally to anchor the wicks but isn't shown either - only
+    the wick range itself (high/low) matters to the reader."""
     lines = [
         f"Current gold price (COMEX GC futures, close proxy for spot): ${pd_['current_price']:,.2f}",
-        f"Yesterday's ({pd_['yesterday_date']}) candle: Open ${pd_['open']:,.2f} / High ${pd_['high']:,.2f} "
-        f"/ Low ${pd_['low']:,.2f} / Close ${pd_['close']:,.2f}",
-        f"Yesterday's candle body: top ${pd_['body_top']:,.2f} / bottom ${pd_['body_bottom']:,.2f}",
+        f"Yesterday's ({pd_['yesterday_date']}) range: High ${pd_['high']:,.2f} / Low ${pd_['low']:,.2f}",
         "",
-        "UPPER PIN ZONE Fibonacci (body top -> day's high, the upper wick):",
+        "UPPER PIN ZONE Fibonacci (upper wick, toward the day's high):",
     ]
     for label, level in pd_["upper_pin_fib"]:
-        lines.append(f"  {label}: ${level:,.2f}")
+        if label in DISPLAY_FIB_LEVELS:
+            lines.append(f"  {label}: ${level:,.2f}")
     lines.append("")
-    lines.append("LOWER PIN ZONE Fibonacci (body bottom -> day's low, the lower wick):")
+    lines.append("LOWER PIN ZONE Fibonacci (lower wick, toward the day's low):")
     for label, level in pd_["lower_pin_fib"]:
-        lines.append(f"  {label}: ${level:,.2f}")
+        if label in DISPLAY_FIB_LEVELS:
+            lines.append(f"  {label}: ${level:,.2f}")
     return "\n".join(lines)
 
 
@@ -399,13 +419,13 @@ def fetch_recent_30m_close():
         return None
 
 
-def build_pin_bar_setup_note(pd_, recent_30m):
+def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     """
     Finds whichever fib level, across BOTH pin zones, current price is sitting
-    closest to right now - not hardcoded to 61.8% specifically, since ANY of
-    these levels can be the live decision point a trader is watching (your
-    23.6%-of-the-upper-zone example is exactly this). Precomputed here rather
-    than left to the model, since the price-vs-level comparison must be exact.
+    closest to right now - restricted to the 50/61.8/78.6% levels (the ones
+    actually shown to the reader), so the setup note never references a level
+    the reader can't see in the price data box. Precomputed here rather than
+    left to the model, since the price-vs-level comparison must be exact.
 
     Once the nearest level is found, the most recently closed 30-minute
     candle's close relative to that level determines the read:
@@ -415,16 +435,24 @@ def build_pin_bar_setup_note(pd_, recent_30m):
     - LOWER pin zone (yesterday's rejected sell-off / support wick): closing
       ABOVE the level = bounce (favors a BUY); closing BELOW = break-through
       (favors downside continuation).
+
+    Distance is reported in both dollars and "points" (point_size, default
+    $0.01 - MT4's standard tick size for a 2-digit-quoted XAUUSD symbol; edit
+    the point_size default here if your broker quotes gold with different
+    digit precision).
     """
     candidates = []
     for label, value in pd_["upper_pin_fib"]:
-        candidates.append(("UPPER", label, value))
+        if label in DISPLAY_FIB_LEVELS:
+            candidates.append(("UPPER", label, value))
     for label, value in pd_["lower_pin_fib"]:
-        candidates.append(("LOWER", label, value))
+        if label in DISPLAY_FIB_LEVELS:
+            candidates.append(("LOWER", label, value))
 
     current_price = pd_["current_price"]
     zone, level_label, level_price = min(candidates, key=lambda c: abs(current_price - c[2]))
     distance = abs(current_price - level_price)
+    distance_points = distance / point_size
 
     upper_vals = dict(pd_["upper_pin_fib"])
     lower_vals = dict(pd_["lower_pin_fib"])
@@ -436,8 +464,8 @@ def build_pin_bar_setup_note(pd_, recent_30m):
         return (
             f"Current price (${current_price:,.2f}) is not tightly against any specific pin-bar "
             f"level right now. Closest is the {zone} pin zone's {level_label} level "
-            f"(${level_price:,.2f}), ${distance:,.2f} away - not close enough to treat as an "
-            f"active decision point."
+            f"(${level_price:,.2f}), ${distance:,.2f} away ({distance_points:,.0f} points) - not "
+            f"close enough to treat as an active decision point."
         )
 
     zone_desc = "UPPER pin zone (yesterday's rejected rally / resistance wick)" if zone == "UPPER" \
@@ -445,7 +473,8 @@ def build_pin_bar_setup_note(pd_, recent_30m):
 
     lines = [
         f"Current price (${current_price:,.2f}) is sitting right at the {level_label} level of the "
-        f"{zone_desc}, at ${level_price:,.2f} - this is a live decision point (reversal vs. breakout)."
+        f"{zone_desc}, at ${level_price:,.2f} ({distance_points:,.0f} points away) - this is a live "
+        f"decision point (reversal vs. breakout)."
     ]
 
     close_price = recent_30m["close"] if recent_30m else None
