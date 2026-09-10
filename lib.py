@@ -170,7 +170,7 @@ def text_to_html(text):
     return "".join(out)
 
 
-def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before=""):
+def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None):
     order = ["changed", "yield", "direction", "opposite", "mind"]
     body = extra_html_before
     quick_take = ""
@@ -212,6 +212,16 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
                     f'<div style="font-size:14px;line-height:1.6;">{content_html}</div></div>'
                 )
 
+    nav_html = ""
+    if nav_links:
+        pills = "".join(
+            f'<a href="{escape_html(url)}" style="display:inline-block;padding:6px 14px;margin:0 6px;'
+            f'border-radius:16px;background:#f0f0f5;color:#1a1a2e;font-size:12px;font-weight:600;'
+            f'text-decoration:none;">{escape_html(label)}</a>'
+            for label, url in nav_links
+        )
+        nav_html = f'<div style="text-align:center;padding:14px 0 0;">{pills}</div>'
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape_html(title)}</title></head>
@@ -222,6 +232,7 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
     <h1 style="color:#ffffff;margin:0;font-size:21px;font-weight:700;">{escape_html(title)}</h1>
     <div style="color:#a9b4c4;font-size:12px;margin-top:6px;">{escape_html(subtitle)}</div>
   </div>
+  {nav_html}
   <div style="border:1px solid #eee;border-top:none;padding:22px 24px 20px;border-radius:0 0 12px 12px;">
     {quick_take}{body}
   </div>
