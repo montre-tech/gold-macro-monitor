@@ -128,13 +128,20 @@ def main():
         'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
         + escape_html(data_summary) + "</div>"
     )
-    html_out = build_newsletter_html("Weekly Gold COT Analysis", latest["date"], sections, analysis, data_box_html)
+    html_out = build_newsletter_html(
+        "Weekly Gold COT Analysis", latest["date"], sections, analysis, data_box_html,
+        nav_links=[("Daily Brief →", "daily.html"), ("Archive", "archive/"), ("Home", "index.html")],
+    )
+    html_out_archived = build_newsletter_html(
+        "Weekly Gold COT Analysis", latest["date"], sections, analysis, data_box_html,
+        nav_links=[("Daily Brief →", "../daily.html"), ("Archive", "."), ("Home", "../index.html")],
+    )
 
     os.makedirs("docs/archive", exist_ok=True)
     with open("docs/weekly.html", "w", encoding="utf-8") as f:
         f.write(html_out)
     with open(f'docs/archive/weekly-{latest["date"]}.html', "w", encoding="utf-8") as f:
-        f.write(html_out)
+        f.write(html_out_archived)
 
     maybe_send_email(
         "Weekly Gold COT Analysis - " + latest["date"],
