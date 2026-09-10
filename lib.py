@@ -243,123 +243,118 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
 </body></html>"""
 
 
-def _yahoo_chart_fetch(interval, range_):
+def _twelvedata_request(endpoint, params):
     """
-    Tries Yahoo's chart endpoint across both known hosts (query1/query2 are
-    separately load-balanced, and one occasionally blocks or rate-limits cloud
-    IPs like GitHub Actions runners while the other works). Prints real
-    diagnostic info (HTTP status, response snippet) to the workflow log on
-    failure, instead of just returning None with no explanation - if this still
-    fails, check the Actions run's log output for the printed error to see the
-    actual cause rather than guessing.
+    Calls the Twelve Data API - a proper, documented, key-based market data
+    provider (not a scraped or unofficial endpoint). Free tier: 800 calls/day,
+    8/min, no credit card required. Get a key at https://twelvedata.com/register
+    and set it as the TWELVEDATA_API_KEY secret.
+
+    This replaced Yahoo's GC=F futures symbol, which turned out to be
+    unreliable for this purpose: GC=F tracks whichever COMEX contract month
+    happens to be "front month" at query time, and different contract months
+    can trade hundreds of dollars apart due to the futures curve (contango) -
+    causing exactly the "$4,462 instead of $4,417" kind of error this switch
+    fixes. XAU/USD here is a proper spot-style forex-convention symbol.
     """
-    hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    last_err = None
-    for host in hosts:
-        url = f"https://{host}/v8/finance/chart/GC=F"
-        try:
-            resp = requests.get(url, params={"interval": interval, "range": range_}, headers=headers, timeout=20)
-            if resp.status_code != 200:
-                last_err = f"{host} returned HTTP {resp.status_code}: {resp.text[:300]}"
-                continue
-            data = resp.json()
-            if data.get("chart", {}).get("error"):
-                last_err = f"{host} chart API error: {data['chart']['error']}"
-                continue
-            return data
-        except requests.RequestException as e:
-            last_err = f"{host} request failed: {e}"
-            continue
-        except ValueError as e:  # JSON decode failure
-            last_err = f"{host} returned non-JSON response: {e}"
-            continue
-    print(f"Yahoo chart fetch failed on all hosts. Last error: {last_err}")
-    return None
+    api_key = os.environ.get("TWELVEDATA_API_KEY")
+    if not api_key:
+        print("TWELVEDATA_API_KEY is not set - price data will be unavailable.")
+        return None
+    url = f"https://api.twelvedata.com/{endpoint}"
+    params = dict(params)
+    params["apikey"] = api_key
+    try:
+        resp = requests.get(url, params=params, timeout=20)
+        data = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Twelve Data request to {endpoint} failed: {e}")
+        return None
+    if isinstance(data, dict) and data.get("status") == "error":
+        print(f"Twelve Data API error on {endpoint}: {data.get('message')}")
+        return None
+    return data
 
 
 def fetch_gold_price_data():
     """
-    Fetches current gold price and yesterday's completed daily OHLC from Yahoo
-    Finance's public chart endpoint (no key needed), then computes Fibonacci
-    levels the way the MT4 EA's Pin Zone logic does (FIB_PIN_BOTH) - NOT a
-    plain high-to-low retracement, but two separate Fibonacci sets measured
-    across each wick: the UPPER wick (candle body top -> day's high) and the
-    LOWER wick (candle body bottom -> day's low). This mirrors
-    Fib_DrawPinZones() in the EA, applied to the most recent completed daily
-    candle ("yesterday's pin bar").
+    Fetches current gold spot price and yesterday's completed daily OHLC from
+    Twelve Data's XAU/USD symbol, then computes Fibonacci levels the way the
+    MT4 EA's Pin Zone logic does (FIB_PIN_BOTH): two separate sets across each
+    wick - UPPER (candle body top -> day's high) and LOWER (candle body
+    bottom -> day's low). This mirrors Fib_DrawPinZones() in the EA, applied
+    to the most recent completed daily candle ("yesterday's pin bar").
 
-    Returns a dict of structured values (used both for display and for the
-    61.8% setup-check math below), or None if the fetch/parse fails.
-
-    Caveats, on purpose:
-    - Unofficial Yahoo endpoint - if it changes/blocks, this returns None and
-      the prompt is told to state no specific price at all.
-    - "Yesterday" = Yahoo's daily bar boundary, which may not exactly match
-      your broker's session close time in MT4 - a close approximation, not a
-      pixel-exact match to your EA's own reading.
+    Returns a dict of structured values, or None if the fetch/parse fails or
+    TWELVEDATA_API_KEY isn't set.
     """
-    try:
-        data = _yahoo_chart_fetch(interval="1d", range_="10d")
-        if data is None:
-            return None
-        result = data["chart"]["result"][0]
-        quote = result["indicators"]["quote"][0]
-        timestamps = result["timestamp"]
-        opens, highs, lows, closes = quote["open"], quote["high"], quote["low"], quote["close"]
-
-        candles = []
-        for i in range(len(timestamps)):
-            if None not in (opens[i], highs[i], lows[i], closes[i]):
-                candles.append({
-                    "ts": timestamps[i], "open": opens[i], "high": highs[i],
-                    "low": lows[i], "close": closes[i],
-                })
-
-        if len(candles) < 2:
-            return None
-
-        current_price = result.get("meta", {}).get("regularMarketPrice", candles[-1]["close"])
-
-        # Walk backward from the second-to-last candle to find the last one that's
-        # actually valid (high != low). Futures data occasionally includes flat/
-        # degenerate placeholder bars (e.g. thin-liquidity weekend rollover ticks)
-        # where open=high=low=close - blindly using candles[-2] picked one of these
-        # once, which collapsed every Fibonacci level to the same price.
-        y = None
-        for candidate in reversed(candles[:-1]):  # skip the still-forming last candle
-            if candidate["high"] > candidate["low"]:
-                y = candidate
-                break
-        if y is None:
-            return None
-
-        body_top = max(y["open"], y["close"])
-        body_bottom = min(y["open"], y["close"])
-
-        def fib_set(zero_price, hundred_price):
-            rng = hundred_price - zero_price
-            return [
-                ("0%", zero_price),
-                ("23.6%", zero_price + rng * 0.236),
-                ("38.2%", zero_price + rng * 0.382),
-                ("50%", zero_price + rng * 0.5),
-                ("61.8%", zero_price + rng * 0.618),
-                ("78.6%", zero_price + rng * 0.786),
-                ("100%", hundred_price),
-            ]
-
-        return {
-            "current_price": current_price,
-            "yesterday_date": datetime.datetime.utcfromtimestamp(y["ts"]).strftime("%b %d, %Y"),
-            "open": y["open"], "high": y["high"], "low": y["low"], "close": y["close"],
-            "body_top": body_top, "body_bottom": body_bottom,
-            "upper_pin_fib": fib_set(body_top, y["high"]),      # upper wick
-            "lower_pin_fib": fib_set(body_bottom, y["low"]),    # lower wick
-        }
-    except Exception as e:
-        print(f"Price fetch failed: {e}")
+    price_resp = _twelvedata_request("price", {"symbol": "XAU/USD"})
+    if not price_resp or "price" not in price_resp:
         return None
+    try:
+        current_price = float(price_resp["price"])
+    except (TypeError, ValueError):
+        return None
+
+    series = _twelvedata_request("time_series", {
+        "symbol": "XAU/USD", "interval": "1day", "outputsize": 10, "order": "ASC",
+    })
+    if not series or "values" not in series:
+        return None
+
+    candles = []
+    for v in series["values"]:
+        try:
+            candles.append({
+                "date": v["datetime"],
+                "open": float(v["open"]), "high": float(v["high"]),
+                "low": float(v["low"]), "close": float(v["close"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    if not candles:
+        return None
+
+    # Skip today's bar if the API included a still-forming partial one, then
+    # walk backward past any degenerate/flat bars (high == low) to find the
+    # last genuinely complete daily candle - this is the same defensive check
+    # that caught the earlier flat-candle bug, kept here in case any data
+    # provider ever serves one.
+    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    usable = [c for c in candles if c["date"] != today_str] or candles
+
+    y = None
+    for candidate in reversed(usable):
+        if candidate["high"] > candidate["low"]:
+            y = candidate
+            break
+    if y is None:
+        return None
+
+    body_top = max(y["open"], y["close"])
+    body_bottom = min(y["open"], y["close"])
+
+    def fib_set(zero_price, hundred_price):
+        rng = hundred_price - zero_price
+        return [
+            ("0%", zero_price),
+            ("23.6%", zero_price + rng * 0.236),
+            ("38.2%", zero_price + rng * 0.382),
+            ("50%", zero_price + rng * 0.5),
+            ("61.8%", zero_price + rng * 0.618),
+            ("78.6%", zero_price + rng * 0.786),
+            ("100%", hundred_price),
+        ]
+
+    return {
+        "current_price": current_price,
+        "yesterday_date": y["date"],
+        "open": y["open"], "high": y["high"], "low": y["low"], "close": y["close"],
+        "body_top": body_top, "body_bottom": body_bottom,
+        "upper_pin_fib": fib_set(body_top, y["high"]),      # upper wick
+        "lower_pin_fib": fib_set(body_bottom, y["low"]),    # lower wick
+    }
 
 
 DISPLAY_FIB_LEVELS = ("50%", "61.8%", "78.6%")
@@ -374,7 +369,7 @@ def format_price_context(pd_):
     body (open/close) is used internally to anchor the wicks but isn't shown either - only
     the wick range itself (high/low) matters to the reader."""
     lines = [
-        f"Current gold price (COMEX GC futures, close proxy for spot): ${pd_['current_price']:,.2f}",
+        f"Current gold price (XAU/USD spot): ${pd_['current_price']:,.2f}",
         f"Yesterday's ({pd_['yesterday_date']}) range: High ${pd_['high']:,.2f} / Low ${pd_['low']:,.2f}",
         "",
         "UPPER PIN ZONE Fibonacci (upper wick, toward the day's high):",
@@ -392,30 +387,20 @@ def format_price_context(pd_):
 
 def fetch_recent_30m_close():
     """
-    Fetches the most recently CLOSED 30-minute candle's close price for COMEX gold futures
-    (the second-to-last bar returned, since the last one is usually still
-    forming). Used to confirm or reject the pin-bar 61.8% setup below.
-    Returns {"close": float, "time_label": str} or None if unavailable.
+    Fetches the most recently CLOSED 30-minute candle's close price for
+    XAU/USD via Twelve Data (index 1 of a descending-order series, since
+    index 0 may still be forming). Used to confirm or reject the pin-bar
+    setup below. Returns {"close": float, "time_label": str} or None.
     """
+    series = _twelvedata_request("time_series", {
+        "symbol": "XAU/USD", "interval": "30min", "outputsize": 5, "order": "DESC",
+    })
+    if not series or "values" not in series or len(series["values"]) < 2:
+        return None
     try:
-        data = _yahoo_chart_fetch(interval="30m", range_="2d")
-        if data is None:
-            return None
-        result = data["chart"]["result"][0]
-        quote = result["indicators"]["quote"][0]
-        timestamps = result["timestamp"]
-        closes = quote["close"]
-
-        candles = [(timestamps[i], closes[i]) for i in range(len(timestamps)) if closes[i] is not None]
-        if len(candles) < 2:
-            return None
-        ts, close_price = candles[-2]  # last fully closed 30-minute bar
-        return {
-            "close": close_price,
-            "time_label": datetime.datetime.utcfromtimestamp(ts).strftime("%H:%M UTC"),
-        }
-    except Exception as e:
-        print(f"30-minute candle fetch failed: {e}")
+        v = series["values"][1]
+        return {"close": float(v["close"]), "time_label": v["datetime"]}
+    except (KeyError, TypeError, ValueError):
         return None
 
 
