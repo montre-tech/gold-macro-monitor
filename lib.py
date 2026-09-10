@@ -38,7 +38,7 @@ CARRY_TRADE_FRAMEWORK = (
 ANALYSIS_STYLE_GUIDE = (
     "Write like an experienced macro/futures analyst briefing a trader who already "
     "understands the market - not like a news summary. Do not just restate the inputs "
-    "back as a list. Structure your response in five short sections with these exact "
+    "back as a list. Structure your response in six short sections with these exact "
     "headers:\n"
     "1. WHAT CHANGED - the one or two things that actually matter from the input, and why.\n"
     "2. REAL YIELD / RATE LINKAGE - reason through how this connects to US real yields "
@@ -56,8 +56,17 @@ ANALYSIS_STYLE_GUIDE = (
     "shows a retracement or pullback, explicitly address whether that looks like a genuine trend "
     "reversal or a normal corrective move within a larger trend, and justify which one using the "
     "specific numbers given - do not just assert \"it is just a pullback\" without reasoning.\n"
-    "5. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
-    "Keep the whole thing under 450 words. Be decisive but honest about uncertainty - do not "
+    "5. ECONOMIC CALENDAR & POSITIONING - using the ECONOMIC CALENDAR DATA given below: for each "
+    "event marked ALREADY RELEASED, state whether the actual figure beat, met, or missed forecast "
+    "and what that implies for rate-hike odds, the dollar, real yields, and gold specifically - "
+    "do not just restate the numbers, interpret them. For each event marked NOT YET RELEASED, "
+    "state what a beat vs. a miss would each imply, and give a concrete positioning "
+    "recommendation for going into that release (e.g. reduce size beforehand, avoid opening new "
+    "positions right before a High-impact print, wait for confirmation after) that ties back to "
+    "the DIRECTIONAL VIEW and PIN-BAR setup above. If the calendar data says unavailable or empty, "
+    "say so explicitly rather than inventing an event.\n"
+    "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
+    "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
     "a decision, not investment advice, and you can note that briefly at the end.\n\n"
     "CRITICAL PRICE RULE: only reference the exact current price and Fibonacci levels given to "
@@ -72,13 +81,15 @@ SECTION_HEADERS = [
     ("yield", r"\**\s*2\.\s*REAL YIELD.*?LINKAGE\s*\**:?"),
     ("direction", r"\**\s*3\.\s*DIRECTIONAL VIEW\s*\**:?"),
     ("opposite", r"\**\s*4\.\s*WHY NOT THE OPPOSITE CASE\s*\**:?"),
-    ("mind", r"\**\s*5\.\s*WHAT WOULD CHANGE MY MIND\s*\**:?"),
+    ("calendar", r"\**\s*5\.\s*ECONOMIC CALENDAR[^\n]*POSITIONING\s*\**:?"),
+    ("mind", r"\**\s*6\.\s*WHAT WOULD CHANGE MY MIND\s*\**:?"),
 ]
 
 SECTION_META = {
     "changed": {"label": "What Changed", "icon": "\U0001F4CC", "color": "#34495e"},
     "yield": {"label": "Real Yield / Rate Linkage", "icon": "\U0001F4B5", "color": "#2980b9"},
     "opposite": {"label": "Why Not The Opposite Case", "icon": "\U0001F50E", "color": "#8e44ad"},
+    "calendar": {"label": "Economic Calendar & Positioning", "icon": "\U0001F4C5", "color": "#c0392b"},
     "mind": {"label": "What Would Change My Mind", "icon": "\u26A0\uFE0F", "color": "#b7791f"},
 }
 
@@ -171,7 +182,7 @@ def text_to_html(text):
 
 
 def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None):
-    order = ["changed", "yield", "direction", "opposite", "mind"]
+    order = ["changed", "yield", "direction", "opposite", "calendar", "mind"]
     body = extra_html_before
     quick_take = ""
 
@@ -496,6 +507,103 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
                 f"BELOW this level - price is breaking through it. Favors continuation DOWNSIDE, not a buy."
             )
 
+    return "\n".join(lines)
+
+
+def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
+    """
+    Fetches this week's economic calendar from Forex Factory's public export
+    feed - the same free, key-less JSON feed countless MT4/MT5 news-filter
+    EAs use, updated with actual figures as events release throughout the day.
+
+    Filters down to TODAY's events for the given currencies at Medium/High
+    impact, and splits them into two buckets the prompt treats differently:
+    - released: events with an "actual" figure already reported
+    - upcoming: events later today with no "actual" figure yet
+
+    Rate limit note (from Forex Factory's own guidance): this feed is limited
+    to roughly 2 requests per 5 minutes per IP - completely fine for a once-a-
+    day scheduled job, but don't call this on every tick/run of anything more
+    frequent than that.
+
+    Returns a list of event dicts, or None if the fetch/parse fails.
+    """
+    url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            print(f"Economic calendar fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        events = resp.json()
+        if not isinstance(events, list):
+            print(f"Economic calendar returned unexpected format: {str(events)[:200]}")
+            return None
+    except (requests.RequestException, ValueError) as e:
+        print(f"Economic calendar fetch failed: {e}")
+        return None
+
+    impact_rank = {"Low": 0, "Medium": 1, "High": 2}
+    min_rank = impact_rank.get(min_impact, 1)
+    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+
+    results = []
+    for ev in events:
+        try:
+            country = ev.get("country", "")
+            if country not in currencies:
+                continue
+            impact = ev.get("impact", "Low")
+            if impact_rank.get(impact, 0) < min_rank:
+                continue
+            date_str = ev.get("date", "") or ""
+            if not date_str.startswith(today_str):
+                continue
+            actual = (ev.get("actual") or "").strip()
+            results.append({
+                "title": ev.get("title", "Unknown event"),
+                "country": country,
+                "date": date_str,
+                "impact": impact,
+                "forecast": (ev.get("forecast") or "").strip() or "n/a",
+                "previous": (ev.get("previous") or "").strip() or "n/a",
+                "actual": actual or None,
+                "released": bool(actual),
+            })
+        except Exception:
+            continue
+
+    return results
+
+
+def format_calendar_context(events):
+    """Turns the list from fetch_economic_calendar() into the prompt/display text,
+    clearly separating already-released events from ones still to come today."""
+    if events is None:
+        return "Economic calendar data unavailable this run - do not invent any scheduled events."
+    if not events:
+        return "No Medium/High-impact USD or JPY events scheduled for today."
+
+    released = [e for e in events if e["released"]]
+    upcoming = [e for e in events if not e["released"]]
+
+    lines = []
+    if released:
+        lines.append("ALREADY RELEASED TODAY:")
+        for e in released:
+            lines.append(
+                f"  - [{e['country']}, {e['impact']} impact] {e['title']} - "
+                f"Actual: {e['actual']} | Forecast: {e['forecast']} | Previous: {e['previous']}"
+            )
+    if upcoming:
+        if lines:
+            lines.append("")
+        lines.append("NOT YET RELEASED TODAY:")
+        for e in upcoming:
+            lines.append(
+                f"  - [{e['country']}, {e['impact']} impact] {e['title']} at {e['date']} - "
+                f"Forecast: {e['forecast']} | Previous: {e['previous']}"
+            )
     return "\n".join(lines)
 
 
