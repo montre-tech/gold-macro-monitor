@@ -4,6 +4,7 @@ Mirrors the logic from the Google Apps Script version, ported to Python.
 """
 import datetime
 import html
+import json
 import os
 import re
 import smtplib
@@ -14,6 +15,39 @@ from email.mime.text import MIMEText
 import requests
 
 FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+STATE_DIR = "state"
+LAST_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_daily_analysis.json")
+
+
+def load_last_analysis():
+    """
+    Reads yesterday's stored daily analysis for continuity, since GitHub
+    Actions runs are stateless between invocations otherwise - each run
+    would treat the market as if it had no memory of the previous day.
+    Returns {"date": str, "analysis": str} or None if not found/unreadable
+    (e.g. first-ever run).
+    """
+    try:
+        with open(LAST_ANALYSIS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def save_last_analysis(date_str, analysis_text):
+    """
+    Persists today's analysis so tomorrow's run can reference it. This is a
+    rolling single-day memory that overwrites the previous entry, not an
+    accumulating log - the dated copies in docs/archive/ already serve as
+    the full history if you want to look further back.
+    """
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(LAST_ANALYSIS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"date": date_str, "analysis": analysis_text}, f)
+    except OSError as e:
+        print(f"Could not save analysis state: {e}")
 
 CARRY_TRADE_FRAMEWORK = (
     "BACKGROUND FRAMEWORK - apply this explicitly whenever relevant, do not just gesture at "
@@ -40,16 +74,20 @@ ANALYSIS_STYLE_GUIDE = (
     "understands the market - not like a news summary. Do not just restate the inputs "
     "back as a list. Structure your response in six short sections with these exact "
     "headers:\n"
-    "1. WHAT CHANGED - the one or two things that actually matter from the input, and why.\n"
+    "1. WHAT CHANGED - compare today's inputs against YESTERDAY'S ANALYSIS given below and "
+    "state what is actually different since then - new data, a shift in tone, a level that held "
+    "or broke. If nothing meaningful changed, say so explicitly rather than padding. If no prior "
+    "analysis is available (first run), just assess today's inputs directly.\n"
     "2. REAL YIELD / RATE LINKAGE - reason through how this connects to US real yields "
     "(nominal rates minus inflation expectations), since that is the dominant driver of gold.\n"
     "3. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold "
     "over the next 1-2 weeks, with a rough confidence level (low/medium/high) and the single "
     "biggest reason for that lean. You are also given a PIN-BAR LEVEL SETUP CHECK below, which "
-    "is a specific, already-decided trading rule (not something for you to re-derive) - if it "
-    "says price is at a live decision point, you MUST explicitly state its confirmation/rejection "
-    "verdict and weave it into your near-term view; if it says no level is active, say so "
-    "explicitly rather than inventing one.\n"
+    "is a specific, already-decided trading rule (not something for you to re-derive) - if price "
+    "is inside a green zone, explicitly state the confirmation/rejection verdict and weave it "
+    "into your near-term view; if price is outside both green zones, explicitly tell the trader "
+    "to wait, state the exact pivot price to watch for, and do not suggest an entry until price "
+    "reaches it.\n"
     "4. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction "
     "(e.g. if you lean bearish, give the honest bull case) and then explain specifically why "
     "the current data does not make that the higher-probability outcome right now. If the data "
@@ -433,16 +471,26 @@ def fetch_recent_30m_close():
         return None
 
 
+GREEN_ZONE_RADIUS_POINTS = 1000  # +/- radius around each zone's 50% level; edit this one number to tune it
+
+
 def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     """
-    Finds whichever fib level, across BOTH pin zones, current price is sitting
-    closest to right now - restricted to the 50/61.8/78.6% levels (the ones
-    actually shown to the reader), so the setup note never references a level
-    the reader can't see in the price data box. Precomputed here rather than
-    left to the model, since the price-vs-level comparison must be exact.
+    Two-stage check, both precomputed here rather than left to the model
+    since exact price-vs-level comparisons must be reliable:
 
-    Once the nearest level is found, the most recently closed 30-minute
-    candle's close relative to that level determines the read:
+    STAGE 1 - GREEN ZONE GATE: is current price within GREEN_ZONE_RADIUS_POINTS
+    of either pin zone's 50% level? This is a broad "is this even worth
+    considering a trade near these levels right now" pre-qualifier - being
+    close to 50% (not necessarily exactly on 61.8% or 78.6%) is still a valid
+    entry consideration area. If price is outside BOTH zones' green zones,
+    the trader is told exactly how far away (in points) they are from the
+    nearest zone's edge, and given the specific price (the "pivot") to watch
+    for price to re-enter the zone - i.e. wait, don't force a trade out here.
+
+    STAGE 2 - if inside a green zone, find the nearest specific fib level
+    (50/61.8/78.6%) within that zone and apply the same 30-minute-candle
+    rejection-vs-breakout read as before:
     - UPPER pin zone (yesterday's rejected rally / resistance wick): closing
       BELOW the level = rejection (favors a SELL); closing ABOVE = break-through
       (favors upside continuation).
@@ -450,45 +498,55 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
       ABOVE the level = bounce (favors a BUY); closing BELOW = break-through
       (favors downside continuation).
 
-    Distance is reported in both dollars and "points" (point_size, default
+    Distances are reported in both dollars and "points" (point_size, default
     $0.01 - MT4's standard tick size for a 2-digit-quoted XAUUSD symbol; edit
     the point_size default here if your broker quotes gold with different
     digit precision).
     """
-    candidates = []
-    for label, value in pd_["upper_pin_fib"]:
-        if label in DISPLAY_FIB_LEVELS:
-            candidates.append(("UPPER", label, value))
-    for label, value in pd_["lower_pin_fib"]:
-        if label in DISPLAY_FIB_LEVELS:
-            candidates.append(("LOWER", label, value))
-
     current_price = pd_["current_price"]
-    zone, level_label, level_price = min(candidates, key=lambda c: abs(current_price - c[2]))
+    upper_vals = dict(pd_["upper_pin_fib"])
+    lower_vals = dict(pd_["lower_pin_fib"])
+    radius = GREEN_ZONE_RADIUS_POINTS * point_size
+
+    zones = [
+        ("UPPER", upper_vals["50%"], upper_vals["50%"] - radius, upper_vals["50%"] + radius),
+        ("LOWER", lower_vals["50%"], lower_vals["50%"] - radius, lower_vals["50%"] + radius),
+    ]
+
+    in_zone = next((name for name, mid, lo, hi in zones if lo <= current_price <= hi), None)
+
+    if in_zone is None:
+        # Outside both green zones - find the nearer zone's closest edge (the pivot to watch).
+        edge_candidates = []
+        for name, mid, lo, hi in zones:
+            if current_price < lo:
+                edge_candidates.append((name, lo, lo - current_price))
+            else:  # current_price > hi
+                edge_candidates.append((name, hi, current_price - hi))
+        zone_name, pivot_price, distance = min(edge_candidates, key=lambda c: c[2])
+        distance_points = distance / point_size
+        return (
+            f"Current price (${current_price:,.2f}) is OUTSIDE the {GREEN_ZONE_RADIUS_POINTS}-point "
+            f"green zone around the {zone_name} pin zone's 50% level - ${distance:,.2f} "
+            f"({distance_points:,.0f} points) away from the nearest edge of that zone. "
+            f"Advise the trader to WAIT rather than force an entry here. The pivot level to watch "
+            f"is ${pivot_price:,.2f} - once price reaches that level (entering the green zone), "
+            f"it becomes a valid entry consideration area again."
+        )
+
+    zone_fib = pd_["upper_pin_fib"] if in_zone == "UPPER" else pd_["lower_pin_fib"]
+    level_candidates = [(label, value) for label, value in zone_fib if label in DISPLAY_FIB_LEVELS]
+    level_label, level_price = min(level_candidates, key=lambda c: abs(current_price - c[1]))
     distance = abs(current_price - level_price)
     distance_points = distance / point_size
 
-    upper_vals = dict(pd_["upper_pin_fib"])
-    lower_vals = dict(pd_["lower_pin_fib"])
-    zone_range = abs(upper_vals["100%"] - upper_vals["0%"]) if zone == "UPPER" \
-        else abs(lower_vals["100%"] - lower_vals["0%"])
-    threshold = 0.12 * zone_range  # tighter than a single-level check, since levels sit closer together
-
-    if distance > threshold:
-        return (
-            f"Current price (${current_price:,.2f}) is not tightly against any specific pin-bar "
-            f"level right now. Closest is the {zone} pin zone's {level_label} level "
-            f"(${level_price:,.2f}), ${distance:,.2f} away ({distance_points:,.0f} points) - not "
-            f"close enough to treat as an active decision point."
-        )
-
-    zone_desc = "UPPER pin zone (yesterday's rejected rally / resistance wick)" if zone == "UPPER" \
+    zone_desc = "UPPER pin zone (yesterday's rejected rally / resistance wick)" if in_zone == "UPPER" \
         else "LOWER pin zone (yesterday's rejected sell-off / support wick)"
 
     lines = [
-        f"Current price (${current_price:,.2f}) is sitting right at the {level_label} level of the "
-        f"{zone_desc}, at ${level_price:,.2f} ({distance_points:,.0f} points away) - this is a live "
-        f"decision point (reversal vs. breakout)."
+        f"Current price (${current_price:,.2f}) is INSIDE the green zone around the {in_zone} pin "
+        f"zone's 50% level - a valid entry consideration area. Nearest specific level within it: "
+        f"{level_label} of the {zone_desc}, at ${level_price:,.2f} ({distance_points:,.0f} points away)."
     ]
 
     close_price = recent_30m["close"] if recent_30m else None
@@ -501,7 +559,7 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
         )
         return "\n".join(lines)
 
-    if zone == "UPPER":
+    if in_zone == "UPPER":
         if close_price < level_price:
             lines.append(
                 f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
