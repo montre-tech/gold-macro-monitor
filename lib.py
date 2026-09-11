@@ -755,6 +755,146 @@ def format_calendar_context(events):
     return "\n".join(lines)
 
 
+def save_calendar_archive(date_str, iso_date, events):
+    """
+    Archives the day's filtered Medium/High-impact calendar events (previous,
+    forecast, actual) to docs/archive/ - as raw JSON (structured, for reuse)
+    and a simple readable HTML table (for browsing via the Pages site).
+    Complements the yesterday's-analysis state file: this preserves the
+    underlying data permanently, that captures the AI's read on it for one
+    rolling day.
+    """
+    os.makedirs("docs/archive", exist_ok=True)
+
+    json_path = f"docs/archive/calendar-{iso_date}.json"
+    try:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"date": date_str, "events": events or []}, f, indent=2)
+    except OSError as e:
+        print(f"Could not write calendar archive JSON: {e}")
+
+    status_labels = {
+        "released": "Released", "released_no_actual": "Released (no actual)", "upcoming": "Upcoming"
+    }
+    rows = ""
+    for e in (events or []):
+        rows += (
+            "<tr>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('time_label', ''))}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('country', ''))}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('impact', ''))}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('title', ''))}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('previous') or 'n/a')}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('forecast') or 'n/a')}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('actual') or 'n/a')}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>"
+            f"{escape_html(status_labels.get(e.get('status'), e.get('status', '')))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        rows = "<tr><td colspan='8' style='padding:10px;color:#888;'>No Medium/High-impact USD or JPY events that day.</td></tr>"
+
+    html_out = f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar Archive - {escape_html(date_str)}</title></head>
+<body style="margin:0;padding:24px;background:#f2f2f2;font-family:{FONT_STACK};">
+<div style="max-width:720px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;">
+    <div style="color:#8ab4f8;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;">Gold &amp; Macro Intelligence</div>
+    <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Economic Calendar Archive</h1>
+    <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">{escape_html(date_str)} (times in {DISPLAY_TZ_LABEL})</div>
+  </div>
+  <div style="padding:16px 24px 24px;overflow-x:auto;">
+    <table style="border-collapse:collapse;width:100%;font-size:13px;">
+      <thead><tr style="text-align:left;color:#555;">
+        <th style="padding:6px 10px;">Time</th><th style="padding:6px 10px;">Ccy</th>
+        <th style="padding:6px 10px;">Impact</th><th style="padding:6px 10px;">Event</th>
+        <th style="padding:6px 10px;">Previous</th><th style="padding:6px 10px;">Forecast</th>
+        <th style="padding:6px 10px;">Actual</th><th style="padding:6px 10px;">Status</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div>
+  <div style="color:#999;font-size:11px;text-align:center;padding:0 0 16px;">Automatically generated</div>
+</div>
+</body></html>"""
+    html_path = f"docs/archive/calendar-{iso_date}.html"
+    try:
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_out)
+    except OSError as e:
+        print(f"Could not write calendar archive HTML: {e}")
+
+
+def rebuild_archive_index():
+    """
+    Regenerates docs/archive/index.html listing every archived file.
+    GitHub Pages does not provide automatic directory listings, so without
+    this file, the "Archive" nav link on every page 404s on that folder -
+    this has likely been broken since the nav links were first added.
+    Groups by type and sorts each group newest-first (filenames embed ISO
+    dates, so a reverse string sort orders them correctly).
+    """
+    archive_dir = "docs/archive"
+    os.makedirs(archive_dir, exist_ok=True)
+    try:
+        files = sorted(os.listdir(archive_dir), reverse=True)
+    except OSError as e:
+        print(f"Could not list archive directory: {e}")
+        return
+
+    groups = {"Daily Briefs": [], "Weekly COT Analyses": [], "Economic Calendar Data": []}
+    for fname in files:
+        if fname in ("index.html", ".gitkeep"):
+            continue
+        if fname.startswith("daily-") and fname.endswith(".html"):
+            groups["Daily Briefs"].append(fname)
+        elif fname.startswith("weekly-") and fname.endswith(".html"):
+            groups["Weekly COT Analyses"].append(fname)
+        elif fname.startswith("calendar-") and fname.endswith(".html"):
+            groups["Economic Calendar Data"].append(fname)
+        # calendar-*.json files are intentionally not linked individually -
+        # the matching .html page is the browsable entry point for that data.
+
+    sections_html = ""
+    for label, flist in groups.items():
+        if not flist:
+            continue
+        items = "".join(
+            f'<li style="margin-bottom:6px;"><a href="{escape_html(f)}" style="color:#1a1a2e;">{escape_html(f)}</a></li>'
+            for f in flist
+        )
+        sections_html += (
+            f'<h3 style="font-size:14px;color:#34495e;margin:20px 0 8px;">{escape_html(label)}</h3>'
+            f'<ul style="list-style:none;padding:0;font-size:13px;">{items}</ul>'
+        )
+    if not sections_html:
+        sections_html = '<p style="color:#888;">No archived reports yet.</p>'
+
+    html_out = f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archive</title></head>
+<body style="margin:0;padding:24px;background:#f2f2f2;font-family:{FONT_STACK};">
+<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;">
+    <div style="color:#8ab4f8;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;">Gold &amp; Macro Intelligence</div>
+    <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Archive</h1>
+  </div>
+  <div style="padding:16px 24px 24px;">
+    <p><a href="../daily.html" style="color:#1a1a2e;">&larr; Latest Daily Brief</a> &nbsp;|&nbsp;
+       <a href="../weekly.html" style="color:#1a1a2e;">Latest Weekly COT</a> &nbsp;|&nbsp;
+       <a href="../index.html" style="color:#1a1a2e;">Home</a></p>
+    {sections_html}
+  </div>
+</div>
+</body></html>"""
+    try:
+        with open(os.path.join(archive_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(html_out)
+    except OSError as e:
+        print(f"Could not write archive index: {e}")
+
+
 def maybe_send_email(subject, plain_text, html_body):
     """Sends via Gmail SMTP if EMAIL_USER/EMAIL_PASS secrets are set; otherwise skips
     quietly, since publishing to GitHub Pages is enough on its own."""
