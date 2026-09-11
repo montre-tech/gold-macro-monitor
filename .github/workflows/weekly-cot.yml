@@ -2,12 +2,8 @@ name: Weekly Gold COT Analysis
 
 on:
   schedule:
-    - cron: '6 13 * * 6'
+    - cron: '0 13 * * 6'
   workflow_dispatch: {}
-
-concurrency:
-  group: weekly-cot
-  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -17,9 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Sync with remote
-        run: git pull --ff-only origin "${{ github.ref_name }}"
 
       - uses: actions/setup-python@v5
         with:
