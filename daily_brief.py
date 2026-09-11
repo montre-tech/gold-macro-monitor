@@ -23,6 +23,7 @@ from lib import (
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
     fetch_economic_calendar,
+    fetch_economic_calendar_with_retry,
     format_calendar_context,
     load_last_analysis,
     save_last_analysis,
@@ -64,7 +65,7 @@ def main():
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
 
-    calendar_events = fetch_economic_calendar()
+    calendar_events = fetch_economic_calendar_with_retry()
     calendar_block = format_calendar_context(calendar_events)
 
     yesterday_state = load_last_analysis()
