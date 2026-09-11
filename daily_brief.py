@@ -26,6 +26,8 @@ from lib import (
     format_calendar_context,
     load_last_analysis,
     save_last_analysis,
+    save_calendar_archive,
+    rebuild_archive_index,
     escape_html,
 )
 
@@ -123,6 +125,9 @@ def main():
         f.write(html_out)
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
+
+    save_calendar_archive(date_str, datetime.date.today().isoformat(), calendar_events)
+    rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
 
