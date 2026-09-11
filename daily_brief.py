@@ -28,6 +28,7 @@ from lib import (
     save_last_analysis,
     save_calendar_archive,
     rebuild_archive_index,
+    current_display_timestamp,
     escape_html,
 )
 
@@ -92,6 +93,7 @@ def main():
 
     analysis = ask_gemini(prompt)
     date_str = datetime.date.today().strftime("%b %d, %Y")
+    page_timestamp = current_display_timestamp()
     sections = parse_sections(analysis)
     save_last_analysis(date_str, analysis)
 
@@ -110,13 +112,13 @@ def main():
         )
 
     html_out = build_newsletter_html(
-        "Daily Gold / Macro Brief", date_str, sections, analysis, data_box_html,
+        "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, analysis, data_box_html,
         nav_links=[("Weekly COT →", "weekly.html"), ("Archive", "archive/"), ("Home", "index.html")],
     )
     # Archive copies live one folder deeper (docs/archive/), so their nav links need
     # a "../" prefix to point back to the top-level pages correctly.
     html_out_archived = build_newsletter_html(
-        "Daily Gold / Macro Brief", date_str, sections, analysis, data_box_html,
+        "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, analysis, data_box_html,
         nav_links=[("Weekly COT →", "../weekly.html"), ("Archive", "."), ("Home", "../index.html")],
     )
 
