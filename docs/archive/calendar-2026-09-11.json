@@ -1,0 +1,65 @@
+{
+  "date": "Sep 11, 2026",
+  "events": [
+    {
+      "title": "Core CPI m/m",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.2%",
+      "previous": "0.2%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Core CPI y/y",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "2.4%",
+      "previous": "2.5%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "CPI m/m",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.4%",
+      "previous": "0.1%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "CPI y/y",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "3.4%",
+      "previous": "3.4%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Prelim UoM Consumer Sentiment",
+      "country": "USD",
+      "time_label": "Sep 11, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "51.0",
+      "previous": "51.0",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Prelim UoM Inflation Expectations",
+      "country": "USD",
+      "time_label": "Sep 11, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "4.3%",
+      "actual": null,
+      "status": "upcoming"
+    }
+  ]
+}
