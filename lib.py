@@ -405,15 +405,30 @@ def fetch_recent_30m_close():
     XAU/USD via Twelve Data (index 1 of a descending-order series, since
     index 0 may still be forming). Used to confirm or reject the pin-bar
     setup below. Returns {"close": float, "time_label": str} or None.
+
+    Requests an explicit UTC timezone from Twelve Data (rather than trusting
+    whatever "exchange" default timezone it might otherwise use) and converts
+    to the same DISPLAY_TZ_LABEL convention as the calendar, with the full
+    date included - a bare time with no date/timezone label is exactly the
+    kind of thing that causes confusion about which day's candle this is.
     """
     series = _twelvedata_request("time_series", {
         "symbol": "XAU/USD", "interval": "30min", "outputsize": 5, "order": "DESC",
+        "timezone": "UTC",
     })
     if not series or "values" not in series or len(series["values"]) < 2:
         return None
     try:
         v = series["values"][1]
-        return {"close": float(v["close"]), "time_label": v["datetime"]}
+        dt_utc = datetime.datetime.strptime(v["datetime"], "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc
+        )
+        display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+        dt_display = dt_utc.astimezone(display_tz)
+        return {
+            "close": float(v["close"]),
+            "time_label": dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
+        }
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -544,10 +559,17 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     frequent than that.
 
     Returns a list of event dicts, or None if the fetch/parse fails. Prints a
-    diagnostic count of total-vs-filtered events either way, so a "missing
-    event" report can be diagnosed from the Actions log instead of guessing.
+    diagnostic count of total-vs-filtered events either way, plus the raw
+    field data for any event that lands in released_no_actual, so a "the site
+    shows it but we don't" report can be diagnosed from the Actions log
+    instead of guessing again.
     """
-    url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    # Cache-busting query param: this mirror sits behind a CDN, and long-time
+    # users of this exact feed have reported it can keep serving a stale
+    # cached snapshot for a while after Forex Factory's origin has already
+    # posted a new actual figure. A changing param forces a fresh fetch
+    # instead of a cached one.
+    url = f"https://nfs.faireconomy.media/ff_calendar_thisweek.json?nocache={int(time.time())}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
@@ -602,13 +624,18 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
                 status = "released"
             elif time_passed:
                 status = "released_no_actual"
+                # Print the raw fields for this specific event, so if it's still
+                # blank after the cache-busting fix, we have hard evidence of
+                # exactly what this feed actually contains for it right now,
+                # rather than guessing about field names again.
+                print(f"released_no_actual diagnostic - raw event data: {ev}")
             else:
                 status = "upcoming"
 
             results.append({
                 "title": ev.get("title", "Unknown event"),
                 "country": country,
-                "time_label": event_dt_display.strftime("%H:%M") + f" {DISPLAY_TZ_LABEL}",
+                "time_label": event_dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
                 "impact": impact,
                 "forecast": (ev.get("forecast") or "").strip() or "n/a",
                 "previous": (ev.get("previous") or "").strip() or "n/a",
