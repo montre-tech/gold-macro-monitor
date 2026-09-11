@@ -721,6 +721,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
             results.append({
                 "title": ev.get("title", "Unknown event"),
                 "country": country,
+                "date_iso": event_dt_display.date().isoformat(),
                 "time_label": event_dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
                 "impact": impact,
                 "forecast": (ev.get("forecast") or "").strip() or "n/a",
@@ -815,51 +816,75 @@ def format_calendar_context(events):
     return "\n".join(lines)
 
 
-def save_calendar_archive(date_str, iso_date, events):
+def save_calendar_archive(events):
     """
-    Archives the day's filtered Medium/High-impact calendar events (previous,
-    forecast, actual) to docs/archive/ - as raw JSON (structured, for reuse)
-    and a simple readable HTML table (for browsing via the Pages site).
-    Complements the yesterday's-analysis state file: this preserves the
-    underlying data permanently, that captures the AI's read on it for one
-    rolling day.
+    Archives Medium/High-impact calendar events to docs/archive/ - one
+    JSON + HTML pair per EVENT date, not per run date. Events are grouped by
+    their own date_iso and merged into that date's existing file (keyed by
+    country+title) rather than overwritten, so a later run that re-covers
+    the same day via days_back can fill in an actual figure that arrived
+    late, instead of that day's file being permanently frozen with whatever
+    its own day's run happened to see.
     """
     os.makedirs("docs/archive", exist_ok=True)
 
-    json_path = f"docs/archive/calendar-{iso_date}.json"
-    try:
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump({"date": date_str, "events": events or []}, f, indent=2)
-    except OSError as e:
-        print(f"Could not write calendar archive JSON: {e}")
+    by_date = {}
+    for e in (events or []):
+        by_date.setdefault(e.get("date_iso"), []).append(e)
 
     status_labels = {
         "released": "Released", "released_no_actual": "Released (no actual)", "upcoming": "Upcoming"
     }
-    rows = ""
-    for e in (events or []):
-        rows += (
-            "<tr>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('time_label', ''))}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('country', ''))}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('impact', ''))}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('title', ''))}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('previous') or 'n/a')}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('forecast') or 'n/a')}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('actual') or 'n/a')}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>"
-            f"{escape_html(status_labels.get(e.get('status'), e.get('status', '')))}</td>"
-            "</tr>"
-        )
-    if not rows:
-        rows = "<tr><td colspan='8' style='padding:10px;color:#888;'>No Medium/High-impact USD or JPY events that day.</td></tr>"
-
     nav_html = build_nav_pills([
         ("Daily Brief", "../daily.html"), ("Weekly COT", "../weekly.html"),
         ("Archive Index", "."), ("Home", "../index.html"),
     ])
 
-    html_out = f"""<!doctype html>
+    for iso_date, day_events in by_date.items():
+        if not iso_date:
+            continue
+        try:
+            date_str = datetime.date.fromisoformat(iso_date).strftime("%b %d, %Y")
+        except ValueError:
+            date_str = iso_date
+
+        json_path = f"docs/archive/calendar-{iso_date}.json"
+        existing_events = []
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                existing_events = json.load(f).get("events", [])
+        except (OSError, ValueError):
+            existing_events = []
+
+        merged = {(e.get("country"), e.get("title")): e for e in existing_events}
+        merged.update({(e.get("country"), e.get("title")): e for e in day_events})
+        merged_events = sorted(merged.values(), key=lambda e: e.get("time_label", ""))
+
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump({"date": date_str, "events": merged_events}, f, indent=2)
+        except OSError as e:
+            print(f"Could not write calendar archive JSON for {iso_date}: {e}")
+
+        rows = ""
+        for e in merged_events:
+            rows += (
+                "<tr>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('time_label', ''))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('country', ''))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('impact', ''))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('title', ''))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('previous') or 'n/a')}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('forecast') or 'n/a')}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('actual') or 'n/a')}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>"
+                f"{escape_html(status_labels.get(e.get('status'), e.get('status', '')))}</td>"
+                "</tr>"
+            )
+        if not rows:
+            rows = "<tr><td colspan='8' style='padding:10px;color:#888;'>No Medium/High-impact USD or JPY events that day.</td></tr>"
+
+        html_out = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Calendar Archive - {escape_html(date_str)}</title></head>
 <body style="margin:0;padding:24px;background:#f2f2f2;font-family:{FONT_STACK};">
@@ -867,7 +892,7 @@ def save_calendar_archive(date_str, iso_date, events):
   <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;">
     <div style="color:#8ab4f8;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;">Gold &amp; Macro Intelligence</div>
     <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Economic Calendar Archive</h1>
-    <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">Rolling window as of {escape_html(date_str)} - each event shows its own date (times in {DISPLAY_TZ_LABEL})</div>
+    <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">{escape_html(date_str)} (times in {DISPLAY_TZ_LABEL})</div>
   </div>
   {nav_html}
   <div style="padding:16px 24px 24px;overflow-x:auto;">
@@ -884,12 +909,12 @@ def save_calendar_archive(date_str, iso_date, events):
   <div style="color:#999;font-size:11px;text-align:center;padding:0 0 16px;">Automatically generated</div>
 </div>
 </body></html>"""
-    html_path = f"docs/archive/calendar-{iso_date}.html"
-    try:
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_out)
-    except OSError as e:
-        print(f"Could not write calendar archive HTML: {e}")
+        html_path = f"docs/archive/calendar-{iso_date}.html"
+        try:
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_out)
+        except OSError as e:
+            print(f"Could not write calendar archive HTML for {iso_date}: {e}")
 
 
 def rebuild_archive_index():
