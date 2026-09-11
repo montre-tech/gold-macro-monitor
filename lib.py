@@ -222,6 +222,21 @@ def text_to_html(text):
     return "".join(out)
 
 
+def build_nav_pills(nav_links):
+    """Shared nav-pill markup, used by build_newsletter_html and by pages built
+    outside it (like the calendar archive page), so navigation looks identical
+    everywhere instead of drifting between hand-copied versions."""
+    if not nav_links:
+        return ""
+    pills = "".join(
+        f'<a href="{escape_html(url)}" style="display:inline-block;padding:6px 14px;margin:0 6px;'
+        f'border-radius:16px;background:#f0f0f5;color:#1a1a2e;font-size:12px;font-weight:600;'
+        f'text-decoration:none;">{escape_html(label)}</a>'
+        for label, url in nav_links
+    )
+    return f'<div style="text-align:center;padding:14px 0 0;">{pills}</div>'
+
+
 def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None):
     order = ["changed", "yield", "direction", "opposite", "calendar", "mind"]
     body = extra_html_before
@@ -264,15 +279,7 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
                     f'<div style="font-size:14px;line-height:1.6;">{content_html}</div></div>'
                 )
 
-    nav_html = ""
-    if nav_links:
-        pills = "".join(
-            f'<a href="{escape_html(url)}" style="display:inline-block;padding:6px 14px;margin:0 6px;'
-            f'border-radius:16px;background:#f0f0f5;color:#1a1a2e;font-size:12px;font-weight:600;'
-            f'text-decoration:none;">{escape_html(label)}</a>'
-            for label, url in nav_links
-        )
-        nav_html = f'<div style="text-align:center;padding:14px 0 0;">{pills}</div>'
+    nav_html = build_nav_pills(nav_links)
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -590,6 +597,16 @@ DISPLAY_TZ_OFFSET_HOURS = 3  # GMT+3 - change this one number if you trade from 
 DISPLAY_TZ_LABEL = "GMT+3"
 
 
+def current_display_timestamp():
+    """Returns the current time formatted in DISPLAY_TZ_LABEL, for stamping pages with
+    exactly when they were generated - important since daily.html/weekly.html get
+    overwritten every run, and a bare date alone can't distinguish between two runs on
+    the same day (which came up directly when testing the continuity feature)."""
+    display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+    now_display = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz)
+    return now_display.strftime("%b %d, %Y - %H:%M") + f" {DISPLAY_TZ_LABEL}"
+
+
 def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     """
     Fetches this week's economic calendar from Forex Factory's public export
@@ -794,6 +811,11 @@ def save_calendar_archive(date_str, iso_date, events):
     if not rows:
         rows = "<tr><td colspan='8' style='padding:10px;color:#888;'>No Medium/High-impact USD or JPY events that day.</td></tr>"
 
+    nav_html = build_nav_pills([
+        ("Daily Brief", "../daily.html"), ("Weekly COT", "../weekly.html"),
+        ("Archive Index", "."), ("Home", "../index.html"),
+    ])
+
     html_out = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Calendar Archive - {escape_html(date_str)}</title></head>
@@ -804,6 +826,7 @@ def save_calendar_archive(date_str, iso_date, events):
     <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Economic Calendar Archive</h1>
     <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">{escape_html(date_str)} (times in {DISPLAY_TZ_LABEL})</div>
   </div>
+  {nav_html}
   <div style="padding:16px 24px 24px;overflow-x:auto;">
     <table style="border-collapse:collapse;width:100%;font-size:13px;">
       <thead><tr style="text-align:left;color:#555;">
@@ -871,6 +894,8 @@ def rebuild_archive_index():
     if not sections_html:
         sections_html = '<p style="color:#888;">No archived reports yet.</p>'
 
+    nav_html = build_nav_pills([("Daily Brief", "../daily.html"), ("Weekly COT", "../weekly.html"), ("Home", "../index.html")])
+
     html_out = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Archive</title></head>
@@ -880,10 +905,8 @@ def rebuild_archive_index():
     <div style="color:#8ab4f8;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;">Gold &amp; Macro Intelligence</div>
     <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Archive</h1>
   </div>
+  {nav_html}
   <div style="padding:16px 24px 24px;">
-    <p><a href="../daily.html" style="color:#1a1a2e;">&larr; Latest Daily Brief</a> &nbsp;|&nbsp;
-       <a href="../weekly.html" style="color:#1a1a2e;">Latest Weekly COT</a> &nbsp;|&nbsp;
-       <a href="../index.html" style="color:#1a1a2e;">Home</a></p>
     {sections_html}
   </div>
 </div>
