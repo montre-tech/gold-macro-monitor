@@ -23,7 +23,6 @@ from lib import (
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
     fetch_economic_calendar,
-    fetch_economic_calendar_with_retry,
     format_calendar_context,
     load_last_analysis,
     save_last_analysis,
@@ -65,7 +64,7 @@ def main():
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
 
-    calendar_events = fetch_economic_calendar_with_retry()
+    calendar_events = fetch_economic_calendar()
     calendar_block = format_calendar_context(calendar_events)
 
     yesterday_state = load_last_analysis()
@@ -129,7 +128,7 @@ def main():
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
 
-    save_calendar_archive(fetch_economic_calendar(days_back=2))
+    save_calendar_archive(date_str, datetime.date.today().isoformat(), fetch_economic_calendar(days_back=2))
     rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
