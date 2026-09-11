@@ -24,6 +24,8 @@ from lib import (
     build_pin_bar_setup_note,
     fetch_economic_calendar,
     format_calendar_context,
+    load_last_analysis,
+    save_last_analysis,
     escape_html,
 )
 
@@ -62,8 +64,17 @@ def main():
     calendar_events = fetch_economic_calendar()
     calendar_block = format_calendar_context(calendar_events)
 
+    yesterday_state = load_last_analysis()
+    if yesterday_state:
+        yesterday_block = f"({yesterday_state['date']}):\n{yesterday_state['analysis']}"
+    else:
+        yesterday_block = "No prior day's analysis available (first run, or state file missing)."
+
     prompt = (
         CARRY_TRADE_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
+        "\n\nYESTERDAY'S ANALYSIS (for continuity - see instructions in WHAT CHANGED above for "
+        "how to use this):\n" +
+        yesterday_block +
         "\n\nCURRENT PRICE DATA (use ONLY these numbers if you reference price at all):\n" +
         price_block +
         "\n\nPIN-BAR LEVEL SETUP CHECK (a specific, already-decided trading rule - see "
@@ -80,6 +91,7 @@ def main():
     analysis = ask_gemini(prompt)
     date_str = datetime.date.today().strftime("%b %d, %Y")
     sections = parse_sections(analysis)
+    save_last_analysis(date_str, analysis)
 
     data_box_html = ""
     if price_data:
