@@ -738,6 +738,38 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
     return results
 
 
+def fetch_economic_calendar_with_retry(
+    currencies=("USD", "JPY"), min_impact="Medium", days_back=0,
+    max_wait_seconds=300, poll_interval_seconds=150,
+):
+    """
+    Wraps fetch_economic_calendar() with a short polling loop: if any event
+    comes back as 'released_no_actual' (its scheduled time has passed but
+    Forex Factory's feed hasn't posted the actual figure yet - see that
+    function's docstring for why this feed lags), wait and re-fetch a couple
+    of times instead of immediately accepting 'n/a'/'Released (no actual)'.
+    In practice the feed usually catches up within a few minutes of the real
+    release, so this converts a chunk of released_no_actual results into
+    proper released ones without any change to the classification logic
+    itself.
+
+    poll_interval_seconds defaults to 150s (2.5 min) and max_wait_seconds to
+    300s (2 retries), which stays within Forex Factory's own guidance of
+    roughly 2 requests per 5 minutes per IP even counting the initial fetch.
+    Stops early as soon as no event is left in released_no_actual, so a
+    clean run doesn't pay any extra wait at all.
+    """
+    events = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=days_back)
+    waited = 0
+    while events and any(e["status"] == "released_no_actual" for e in events) and waited < max_wait_seconds:
+        pending = [e["title"] for e in events if e["status"] == "released_no_actual"]
+        print(f"Actual figure not posted yet for {pending} - waiting {poll_interval_seconds}s before re-checking.")
+        time.sleep(poll_interval_seconds)
+        waited += poll_interval_seconds
+        events = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=days_back)
+    return events
+
+
 def format_calendar_context(events):
     """Turns the list from fetch_economic_calendar() into the prompt/display text,
     with three clearly separated buckets and every time labeled in
