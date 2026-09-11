@@ -607,30 +607,40 @@ def current_display_timestamp():
     return now_display.strftime("%b %d, %Y - %H:%M") + f" {DISPLAY_TZ_LABEL}"
 
 
-def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
+def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days_back=0):
     """
     Fetches this week's economic calendar from Forex Factory's public export
     feed - the same free, key-less JSON feed countless MT4/MT5 news-filter
     EAs use.
 
-    Filters down to TODAY's events (today defined in DISPLAY_TZ_OFFSET_HOURS,
-    not UTC - a naive UTC-string-prefix match was fragile right around
-    midnight and could silently drop events) for the given currencies at
-    Medium/High impact, and classifies each into one of three buckets using
-    TWO independent signals rather than trusting FF's "actual" field alone
-    (that field does not reliably populate promptly on this feed, which is
-    exactly what caused events released hours earlier to still show as
-    "upcoming"):
+    Filters down to events from TODAY back through `days_back` prior days
+    (today defined in DISPLAY_TZ_OFFSET_HOURS, not UTC - a naive UTC-string-
+    prefix match was fragile right around midnight and could silently drop
+    events) for the given currencies at Medium/High impact, and classifies
+    each into one of three buckets using TWO independent signals rather than
+    trusting FF's "actual" field alone (that field does not reliably populate
+    promptly on this feed):
     - released: actual figure IS populated - the clean, fully-confirmed case.
     - released_no_actual: scheduled time has already passed (with a 10-minute
-      buffer) but FF hasn't populated an actual figure - the event DID happen,
-      we just don't have FF's printed number for it. The prompt is told to
-      cross-check the news headlines block for the real figure if possible.
+      buffer) but FF hasn't populated an actual figure yet.
     - upcoming: scheduled time is still in the future.
 
+    days_back=0 (default) is used for the live daily brief - only today's
+    events matter for today's positioning decision. A larger days_back is
+    used when building the calendar archive, so a later run can pick up
+    actual figures that arrived late for recent days, even if the original
+    day's snapshot missed them - the archive "catches up" over the next
+    couple of days instead of being permanently frozen with a gap.
+
+    KNOWN LIMITATION: this feed only contains THIS calendar week's events, so
+    a days_back window that crosses back into the previous week (e.g.
+    querying on a Monday or Tuesday) will not find those earlier events. This
+    is a disclosed tradeoff, not a bug - fetching last week's feed too would
+    fix it but isn't implemented here to keep this to one request per call.
+
     Rate limit note (from Forex Factory's own guidance): this feed is limited
-    to roughly 2 requests per 5 minutes per IP - completely fine for a once-a-
-    day scheduled job, but don't call this on every tick/run of anything more
+    to roughly 2 requests per 5 minutes per IP - fine for a couple of calls
+    per scheduled run, but don't call this on every tick of anything more
     frequent than that.
 
     Returns a list of event dicts, or None if the fetch/parse fails. Prints a
@@ -662,6 +672,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
     display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
     now_display = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz)
     today_display_date = now_display.date()
+    earliest_display_date = today_display_date - datetime.timedelta(days=days_back)
     occurred_buffer = datetime.timedelta(minutes=10)
 
     impact_rank = {"Low": 0, "Medium": 1, "High": 2}
@@ -688,7 +699,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium"):
                 event_dt = event_dt.replace(tzinfo=datetime.timezone.utc)
             event_dt_display = event_dt.astimezone(display_tz)
 
-            if event_dt_display.date() != today_display_date:
+            if not (earliest_display_date <= event_dt_display.date() <= today_display_date):
                 continue
 
             actual = (ev.get("actual") or "").strip()
@@ -824,7 +835,7 @@ def save_calendar_archive(date_str, iso_date, events):
   <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 24px;">
     <div style="color:#8ab4f8;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;">Gold &amp; Macro Intelligence</div>
     <h1 style="color:#fff;margin:4px 0 0;font-size:19px;">Economic Calendar Archive</h1>
-    <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">{escape_html(date_str)} (times in {DISPLAY_TZ_LABEL})</div>
+    <div style="color:#a9b4c4;font-size:12px;margin-top:4px;">Rolling window as of {escape_html(date_str)} - each event shows its own date (times in {DISPLAY_TZ_LABEL})</div>
   </div>
   {nav_html}
   <div style="padding:16px 24px 24px;overflow-x:auto;">
