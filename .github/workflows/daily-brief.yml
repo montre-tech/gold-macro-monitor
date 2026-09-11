@@ -2,8 +2,24 @@ name: Daily Gold/Macro Brief
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    # Baseline daily narrative, before the US session gets going.
+    - cron: '4 7 * * *'
+      timezone: 'America/New_York'
+    # Most high-impact USD prints (CPI, PPI, retail sales, jobless claims,
+    # PCE, NFP) release at 8:30am ET. Weekdays only, offset a couple
+    # minutes past the release to give the calendar feed a head start
+    # before our own in-script retry kicks in.
+    - cron: '32 8 * * 1-5'
+      timezone: 'America/New_York'
+    # FOMC statements release at 2:00pm ET. No-op on non-FOMC days, fires
+    # promptly on the ~8 days/year it matters.
+    - cron: '2 14 * * 1-5'
+      timezone: 'America/New_York'
   workflow_dispatch: {}
+
+concurrency:
+  group: daily-brief
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -32,6 +48,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "${{ github.ref_name }}"
           git add docs state
-          git diff --staged --quiet || git commit -m "Daily brief: $(date -u +%Y-%m-%d)"
+          git diff --staged --quiet || git commit -m "Daily brief: $(date -u +%Y-%m-%dT%H:%M)Z"
           git push
