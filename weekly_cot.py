@@ -18,6 +18,7 @@ from lib import (
     escape_html,
     maybe_send_email,
     rebuild_archive_index,
+    current_display_timestamp,
 )
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
@@ -129,12 +130,13 @@ def main():
         'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
         + escape_html(data_summary) + "</div>"
     )
+    page_subtitle = f"COT data as of {latest['date']} \u00b7 generated {current_display_timestamp()}"
     html_out = build_newsletter_html(
-        "Weekly Gold COT Analysis", latest["date"], sections, analysis, data_box_html,
+        "Weekly Gold COT Analysis", page_subtitle, sections, analysis, data_box_html,
         nav_links=[("Daily Brief →", "daily.html"), ("Archive", "archive/"), ("Home", "index.html")],
     )
     html_out_archived = build_newsletter_html(
-        "Weekly Gold COT Analysis", latest["date"], sections, analysis, data_box_html,
+        "Weekly Gold COT Analysis", page_subtitle, sections, analysis, data_box_html,
         nav_links=[("Daily Brief →", "../daily.html"), ("Archive", "."), ("Home", "../index.html")],
     )
 
