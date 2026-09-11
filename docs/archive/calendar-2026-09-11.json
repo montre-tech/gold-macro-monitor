@@ -49,7 +49,7 @@
       "forecast": "0.2%",
       "previous": "0.2%",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "Core CPI y/y",
@@ -59,7 +59,7 @@
       "forecast": "2.4%",
       "previous": "2.5%",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "CPI m/m",
@@ -69,7 +69,7 @@
       "forecast": "0.4%",
       "previous": "0.1%",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "CPI y/y",
@@ -79,7 +79,7 @@
       "forecast": "3.4%",
       "previous": "3.4%",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "Prelim UoM Consumer Sentiment",
