@@ -89,7 +89,7 @@
       "forecast": "51.0",
       "previous": "51.0",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "Prelim UoM Inflation Expectations",
@@ -99,7 +99,7 @@
       "forecast": "n/a",
       "previous": "4.3%",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     }
   ]
 }
