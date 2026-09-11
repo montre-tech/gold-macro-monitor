@@ -129,7 +129,7 @@ def main():
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
 
-    save_calendar_archive(date_str, datetime.date.today().isoformat(), fetch_economic_calendar(days_back=2))
+    save_calendar_archive(fetch_economic_calendar(days_back=2))
     rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
