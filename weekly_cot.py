@@ -17,6 +17,7 @@ from lib import (
     build_newsletter_html,
     escape_html,
     maybe_send_email,
+    rebuild_archive_index,
 )
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
@@ -142,6 +143,8 @@ def main():
         f.write(html_out)
     with open(f'docs/archive/weekly-{latest["date"]}.html', "w", encoding="utf-8") as f:
         f.write(html_out_archived)
+
+    rebuild_archive_index()
 
     maybe_send_email(
         "Weekly Gold COT Analysis - " + latest["date"],
