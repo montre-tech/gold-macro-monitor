@@ -2,7 +2,8 @@
 Daily Gold/Macro Brief.
 Pulls news headlines on Fed policy, BOJ/yen intervention, and gold, then asks Gemini
 to synthesize a structured analysis. Publishes to docs/daily.html (served by GitHub
-Pages) and optionally emails it if EMAIL_USER/EMAIL_PASS secrets are set.
+Pages), optionally emails it if EMAIL_USER/EMAIL_PASS secrets are set, and optionally
+sends a Telegram digest if TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID secrets are set.
 """
 import datetime
 import os
@@ -17,6 +18,8 @@ from lib import (
     ask_gemini,
     parse_sections,
     build_newsletter_html,
+    build_telegram_digest,
+    maybe_send_telegram,
     maybe_send_email,
     fetch_gold_price_data,
     format_price_context,
@@ -31,6 +34,10 @@ from lib import (
     current_display_timestamp,
     escape_html,
 )
+
+# EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
+# used to build the "read the full brief" link sent to Telegram.
+PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
 
 NEWS_QUERIES = [
     "Federal Reserve interest rate decision",
@@ -132,6 +139,11 @@ def main():
     rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
+
+    telegram_digest = build_telegram_digest(
+        "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, PAGES_BASE_URL + "daily.html"
+    )
+    maybe_send_telegram(telegram_digest)
 
 
 if __name__ == "__main__":
