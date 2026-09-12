@@ -37,7 +37,7 @@ from lib import (
 
 # EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
 # used to build the "read the full brief" link sent to Telegram.
-PAGES_BASE_URL = "https://montre-tech.github.io/gold-macro-monitor/"
+PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
 
 NEWS_QUERIES = [
     "Federal Reserve interest rate decision",
@@ -54,6 +54,38 @@ def fetch_news(query, max_items=6):
     items = root.findall("./channel/item")[:max_items]
     lines = [f"- {item.findtext('title')} ({item.findtext('pubDate')})" for item in items]
     return "\n".join(lines)
+
+
+COUNTRY_SEARCH_NAMES = {"USD": "US", "JPY": "Japan"}
+
+
+def fetch_targeted_headlines_for_missing_actuals(calendar_events, max_events=5):
+    """
+    For any Medium/High-impact event whose actual figure the calendar feed
+    didn't provide (status == released_no_actual), runs a targeted news
+    search specifically for that event's result. Major indicators almost
+    always get their actual figure reported in financial news headlines
+    within minutes of release - a more reliable channel for this specific
+    gap than free calendar aggregator feeds, which we've now confirmed (via
+    two separate providers) don't populate actuals reliably for every event.
+    """
+    if not calendar_events:
+        return ""
+
+    missing = [e for e in calendar_events if e.get("status") == "released_no_actual"]
+    if not missing:
+        return ""
+
+    blocks = []
+    for e in missing[:max_events]:
+        country_name = COUNTRY_SEARCH_NAMES.get(e["country"], e["country"])
+        query = f'{country_name} {e["title"]} actual result'
+        headlines = fetch_news(query, max_items=4)
+        blocks.append(
+            f'Search for "{e["title"]}" ({e["country"]}):\n' +
+            (headlines or "  (no relevant headlines found)")
+        )
+    return "\n\n".join(blocks)
 
 
 def main():
@@ -73,6 +105,7 @@ def main():
 
     calendar_events = fetch_economic_calendar()
     calendar_block = format_calendar_context(calendar_events)
+    targeted_headlines_block = fetch_targeted_headlines_for_missing_actuals(calendar_events)
 
     yesterday_state = load_last_analysis()
     if yesterday_state:
@@ -93,6 +126,14 @@ def main():
         "\n\nECONOMIC CALENDAR DATA (see instructions in ECONOMIC CALENDAR & POSITIONING "
         "above for how to use this):\n" +
         calendar_block +
+        (
+            "\n\nTARGETED HEADLINE SEARCH FOR MISSING ACTUALS (the calendar feed above marked "
+            "these events' actual figures as not reported - these are dedicated news searches for "
+            "each one specifically. If a headline states the real figure, use it and note it came "
+            "from news coverage, not the calendar feed. If none of these mention a figure either, "
+            "say the outcome is not yet confirmed rather than inventing one):\n" + targeted_headlines_block
+            if targeted_headlines_block else ""
+        ) +
         "\n\nHere are today's raw headline pulls on Fed policy, BOJ/yen intervention, "
         "gold, and rate-hike odds coverage. Some headlines may be repetitive or low-value - "
         "ignore those and focus on what is actually new or market-moving:" + news_block
