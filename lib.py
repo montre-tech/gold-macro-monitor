@@ -929,6 +929,62 @@ def rebuild_archive_index():
         print(f"Could not write archive index: {e}")
 
 
+def build_telegram_digest(title, subtitle, sections, page_url):
+    """
+    Builds a Telegram-safe message. Telegram's HTML parse_mode only supports a
+    small tag subset (b, i, u, s, a, code, pre) - not full CSS/divs like the
+    email/web version - so this sends a short digest (quick-take + calendar
+    preview) plus a link to the full styled page, rather than trying to cram
+    the whole newsletter into a chat bubble.
+    """
+    lines = [f"<b>{escape_html(title)}</b>", escape_html(subtitle), ""]
+
+    if "direction" in sections:
+        c = direction_color(sections["direction"])
+        first_sentence = re.split(r"[.!?]", sections["direction"])[0].strip()
+        lines.append(f"\U0001F3AF <b>{c['label']}</b>")
+        lines.append(escape_html(first_sentence) + ".")
+        lines.append("")
+
+    if "calendar" in sections:
+        cal_preview = sections["calendar"][:300]
+        lines.append("\U0001F4C5 <b>Calendar &amp; Positioning</b>")
+        lines.append(escape_html(cal_preview) + ("..." if len(sections["calendar"]) > 300 else ""))
+        lines.append("")
+
+    lines.append(f'<a href="{escape_html(page_url)}">Read the full brief \u2192</a>')
+    return "\n".join(lines)
+
+
+def maybe_send_telegram(message_text):
+    """
+    Sends a message via the Telegram Bot API if TELEGRAM_BOT_TOKEN and
+    TELEGRAM_CHAT_ID are set as secrets; otherwise skips quietly (same
+    optional-and-safe pattern as maybe_send_email).
+
+    Setup: message @BotFather on Telegram, send /newbot, follow the prompts
+    to get a bot token. Then send any message to your new bot, and visit
+    https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates in a browser to find
+    your chat_id in the response.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set - skipping Telegram send.")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message_text, "parse_mode": "HTML"}
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        data = resp.json()
+        if not data.get("ok"):
+            print(f"Telegram send failed: {data}")
+        else:
+            print("Telegram message sent.")
+    except (requests.RequestException, ValueError) as e:
+        print(f"Telegram send failed: {e}")
+
+
 def maybe_send_email(subject, plain_text, html_body):
     """Sends via Gmail SMTP if EMAIL_USER/EMAIL_PASS secrets are set; otherwise skips
     quietly, since publishing to GitHub Pages is enough on its own."""
