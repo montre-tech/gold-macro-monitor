@@ -2,8 +2,8 @@
 Weekly Gold COT Analysis.
 Pulls the last 10 weeks of COMEX Gold Commitments of Traders data from CFTC's public
 API, computes trend/percentile context and long-vs-short asymmetry in Python (not left
-to the model), then asks Gemini to write the analysis. Publishes to docs/weekly.html
-and optionally emails it.
+to the model), then asks Gemini to write the analysis. Publishes to docs/weekly.html,
+optionally emails it, and optionally sends a Telegram digest.
 """
 import os
 
@@ -15,11 +15,17 @@ from lib import (
     ask_gemini,
     parse_sections,
     build_newsletter_html,
+    build_telegram_digest,
+    maybe_send_telegram,
     escape_html,
     maybe_send_email,
     rebuild_archive_index,
     current_display_timestamp,
 )
+
+# EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
+# used to build the "read the full analysis" link sent to Telegram.
+PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
@@ -153,6 +159,11 @@ def main():
         data_summary + "\n\n---\n\n" + analysis,
         html_out,
     )
+
+    telegram_digest = build_telegram_digest(
+        "Weekly Gold COT Analysis", page_subtitle, sections, PAGES_BASE_URL + "weekly.html"
+    )
+    maybe_send_telegram(telegram_digest)
 
 
 if __name__ == "__main__":
