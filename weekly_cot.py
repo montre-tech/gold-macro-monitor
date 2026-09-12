@@ -25,7 +25,7 @@ from lib import (
 
 # EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
 # used to build the "read the full analysis" link sent to Telegram.
-PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
+PAGES_BASE_URL = "https://montre-tech.github.io/gold-macro-monitor/"
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
