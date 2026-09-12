@@ -105,8 +105,11 @@ ANALYSIS_STYLE_GUIDE = (
     "a beat vs. a miss would each imply, and give a concrete positioning recommendation going "
     "into that release (e.g. reduce size beforehand, avoid opening new positions right before a "
     "High-impact print, wait for confirmation after) tied back to the DIRECTIONAL VIEW and "
-    "PIN-BAR setup above. If the calendar data says unavailable or empty, say so explicitly "
-    "rather than inventing an event.\n"
+    "PIN-BAR setup above. If the calendar data starts with a NOTE saying no events are scheduled "
+    "today, that means today is a weekend/holiday with a genuinely quiet calendar - discuss the "
+    "listed events as recent context the market is still digesting (bucket (a)/(b) framing only, "
+    "since there is no \"still ahead today\" in that case), not as live same-day triggers. If the "
+    "calendar data says unavailable or empty, say so explicitly rather than inventing an event.\n"
     "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
     "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
@@ -722,6 +725,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
             results.append({
                 "title": ev.get("title", "Unknown event"),
                 "country": country,
+                "event_date": event_dt_display.date().isoformat(),
                 "time_label": event_dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
                 "impact": impact,
                 "forecast": (ev.get("forecast") or "").strip() or "n/a",
@@ -739,23 +743,74 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
     return results
 
 
-def format_calendar_context(events):
-    """Turns the list from fetch_economic_calendar() into the prompt/display text,
-    with three clearly separated buckets and every time labeled in
-    DISPLAY_TZ_LABEL so it's unambiguous to the reader."""
+def fetch_todays_or_recent_calendar(currencies=("USD", "JPY"), min_impact="Medium", max_lookback=4):
+    """
+    Fetches today's calendar events; if there are none - which is EXPECTED
+    and normal on weekends/holidays, not an error - automatically falls back
+    to the most recent day within max_lookback that did have events, so a
+    Saturday/Sunday report still carries Friday's releases as relevant
+    context instead of a blank "nothing today" that ignores what the market
+    is actually still digesting.
+
+    Returns (events, is_fallback, events_date_label):
+    - events: the list for whichever day was used (today or the fallback day)
+    - is_fallback: False if these are genuinely today's events, True if this
+      is a fallback to an earlier day
+    - events_date_label: human-readable date string for that day (e.g. "Sep
+      11, 2026"), or None if no data was available at all
+    """
+    today_events = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=0)
+    if today_events is None:
+        return None, False, None
+    if today_events:
+        today_label = datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+        ).strftime("%b %d, %Y")
+        return today_events, False, today_label
+
+    wider = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=max_lookback)
+    if not wider:
+        return [], False, None
+
+    most_recent_date = max(e["event_date"] for e in wider)
+    recent_events = [e for e in wider if e["event_date"] == most_recent_date]
+    recent_label = datetime.datetime.fromisoformat(most_recent_date).strftime("%b %d, %Y")
+    return recent_events, True, recent_label
+
+
+def format_calendar_context(events, is_fallback=False, events_date_label=None):
+    """Turns the list from fetch_todays_or_recent_calendar()/fetch_economic_calendar()
+    into the prompt/display text, with three clearly separated buckets, every time
+    labeled in DISPLAY_TZ_LABEL, and an explicit note when this is a fallback to the
+    most recent trading day rather than genuinely today's events (e.g. weekends)."""
     if events is None:
         return "Economic calendar data unavailable this run - do not invent any scheduled events."
     if not events:
+        if is_fallback:
+            return (
+                f"No Medium/High-impact USD or JPY events found even when looking back several "
+                f"days ({DISPLAY_TZ_LABEL})."
+            )
         return f"No Medium/High-impact USD or JPY events scheduled for today ({DISPLAY_TZ_LABEL})."
 
     released = [e for e in events if e["status"] == "released"]
     released_no_actual = [e for e in events if e["status"] == "released_no_actual"]
     upcoming = [e for e in events if e["status"] == "upcoming"]
 
-    lines = [f"(All times below are in {DISPLAY_TZ_LABEL}.)"]
+    if is_fallback:
+        lines = [
+            f"NOTE: No events are scheduled today (likely a weekend or market holiday). Showing "
+            f"the most recent trading day's releases instead ({events_date_label}, all times in "
+            f"{DISPLAY_TZ_LABEL}) as the relevant recent context - these already happened, they "
+            f"are not today's events."
+        ]
+    else:
+        lines = [f"(All times below are in {DISPLAY_TZ_LABEL}.)"]
+
+    day_word = "THAT DAY" if is_fallback else "TODAY"
     if released:
         lines.append("")
-        lines.append("ALREADY RELEASED TODAY (actual figure confirmed):")
+        lines.append(f"ALREADY RELEASED {day_word} (actual figure confirmed):")
         for e in released:
             lines.append(
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
@@ -764,7 +819,7 @@ def format_calendar_context(events):
     if released_no_actual:
         lines.append("")
         lines.append(
-            "ALREADY RELEASED TODAY (scheduled time has passed, but this feed hasn't posted "
+            f"ALREADY RELEASED {day_word} (scheduled time has passed, but this feed hasn't posted "
             "the actual figure yet - check the TARGETED HEADLINE SEARCH block below for the real "
             "number if possible, and treat this as having happened, not as still upcoming):"
         )
@@ -773,7 +828,7 @@ def format_calendar_context(events):
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Forecast: {e['forecast']} | Previous: {e['previous']} | Actual: not reported by this feed"
             )
-    if upcoming:
+    if upcoming and not is_fallback:  # a fallback day is entirely in the past - nothing "upcoming" about it
         lines.append("")
         lines.append("NOT YET RELEASED TODAY:")
         for e in upcoming:
