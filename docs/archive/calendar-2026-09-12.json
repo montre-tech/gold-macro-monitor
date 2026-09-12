@@ -1,0 +1,105 @@
+{
+  "date": "Sep 12, 2026",
+  "events": [
+    {
+      "title": "President Trump Speaks",
+      "country": "USD",
+      "time_label": "Sep 10, 04:15 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Core PPI m/m",
+      "country": "USD",
+      "time_label": "Sep 10, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.3%",
+      "previous": "0.2%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "PPI m/m",
+      "country": "USD",
+      "time_label": "Sep 10, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.4%",
+      "previous": "0.0%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Unemployment Claims",
+      "country": "USD",
+      "time_label": "Sep 10, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "205K",
+      "previous": "206K",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Core CPI m/m",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.2%",
+      "previous": "0.2%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Core CPI y/y",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "2.4%",
+      "previous": "2.5%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "CPI m/m",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "0.4%",
+      "previous": "0.1%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "CPI y/y",
+      "country": "USD",
+      "time_label": "Sep 11, 15:30 GMT+3",
+      "impact": "High",
+      "forecast": "3.4%",
+      "previous": "3.4%",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Prelim UoM Consumer Sentiment",
+      "country": "USD",
+      "time_label": "Sep 11, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "51.0",
+      "previous": "51.0",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Prelim UoM Inflation Expectations",
+      "country": "USD",
+      "time_label": "Sep 11, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "4.3%",
+      "actual": null,
+      "status": "released_no_actual"
+    }
+  ]
+}
