@@ -99,13 +99,14 @@ ANALYSIS_STYLE_GUIDE = (
     "beat, met, or missed forecast and what that implies for rate-hike odds, the dollar, real "
     "yields, and gold specifically, don't just restate the numbers, interpret them; (b) events "
     "whose scheduled time has already passed but this feed has no actual figure yet - these DID "
-    "happen, so treat them as released, not upcoming, and check the news headlines below for the "
-    "real figure if they mention it, otherwise say the outcome is not yet confirmed rather than "
-    "inventing a number; (c) events still ahead today - state what a beat vs. a miss would each "
-    "imply, and give a concrete positioning recommendation going into that release (e.g. reduce "
-    "size beforehand, avoid opening new positions right before a High-impact print, wait for "
-    "confirmation after) tied back to the DIRECTIONAL VIEW and PIN-BAR setup above. If the "
-    "calendar data says unavailable or empty, say so explicitly rather than inventing an event.\n"
+    "happen, so treat them as released, not upcoming, and check the TARGETED HEADLINE SEARCH FOR "
+    "MISSING ACTUALS block below (if present) for the real figure, otherwise say the outcome is "
+    "not yet confirmed rather than inventing a number; (c) events still ahead today - state what "
+    "a beat vs. a miss would each imply, and give a concrete positioning recommendation going "
+    "into that release (e.g. reduce size beforehand, avoid opening new positions right before a "
+    "High-impact print, wait for confirmation after) tied back to the DIRECTIONAL VIEW and "
+    "PIN-BAR setup above. If the calendar data says unavailable or empty, say so explicitly "
+    "rather than inventing an event.\n"
     "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
     "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
@@ -764,8 +765,8 @@ def format_calendar_context(events):
         lines.append("")
         lines.append(
             "ALREADY RELEASED TODAY (scheduled time has passed, but this feed hasn't posted "
-            "the actual figure yet - check the news headlines below for the real number if "
-            "possible, and treat this as having happened, not as still upcoming):"
+            "the actual figure yet - check the TARGETED HEADLINE SEARCH block below for the real "
+            "number if possible, and treat this as having happened, not as still upcoming):"
         )
         for e in released_no_actual:
             lines.append(
