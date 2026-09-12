@@ -26,6 +26,7 @@ from lib import (
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
     fetch_economic_calendar,
+    fetch_todays_or_recent_calendar,
     format_calendar_context,
     load_last_analysis,
     save_last_analysis,
@@ -103,8 +104,8 @@ def main():
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
 
-    calendar_events = fetch_economic_calendar()
-    calendar_block = format_calendar_context(calendar_events)
+    calendar_events, calendar_is_fallback, calendar_date_label = fetch_todays_or_recent_calendar()
+    calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
     targeted_headlines_block = fetch_targeted_headlines_for_missing_actuals(calendar_events)
 
     yesterday_state = load_last_analysis()
