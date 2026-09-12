@@ -37,7 +37,7 @@ from lib import (
 
 # EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
 # used to build the "read the full brief" link sent to Telegram.
-PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
+PAGES_BASE_URL = "https://montre-tech.github.io/gold-macro-monitor/"
 
 NEWS_QUERIES = [
     "Federal Reserve interest rate decision",
