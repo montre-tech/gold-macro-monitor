@@ -28,6 +28,8 @@ from lib import (
     fetch_economic_calendar,
     fetch_todays_or_recent_calendar,
     format_calendar_context,
+    extract_and_strip_actuals,
+    apply_extracted_actuals,
     load_last_analysis,
     save_last_analysis,
     save_calendar_archive,
@@ -140,11 +142,19 @@ def main():
         "ignore those and focus on what is actually new or market-moving:" + news_block
     )
 
-    analysis = ask_gemini(prompt)
+    analysis_raw = ask_gemini(prompt)
+    analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
     date_str = datetime.date.today().strftime("%b %d, %Y")
     page_timestamp = current_display_timestamp()
     sections = parse_sections(analysis)
     save_last_analysis(date_str, analysis)
+
+    # Backfill any actual figures the model found in news headlines back into the
+    # calendar data itself, so the archive (and this run's own data box) reflect
+    # the discovered figure instead of permanently showing "not reported by feed".
+    calendar_match_date = calendar_events[0]["event_date"] if calendar_events else None
+    calendar_events = apply_extracted_actuals(calendar_events, extracted_actuals)
+    calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
 
     data_box_html = ""
     if price_data:
@@ -177,7 +187,13 @@ def main():
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
 
-    save_calendar_archive(date_str, datetime.date.today().isoformat(), fetch_economic_calendar(days_back=2))
+    archive_events = fetch_economic_calendar(days_back=2)
+    if calendar_match_date:
+        archive_events = apply_extracted_actuals(
+            [e for e in (archive_events or []) if e["event_date"] == calendar_match_date],
+            extracted_actuals,
+        ) + [e for e in (archive_events or []) if e["event_date"] != calendar_match_date]
+    save_calendar_archive(date_str, datetime.date.today().isoformat(), archive_events)
     rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
