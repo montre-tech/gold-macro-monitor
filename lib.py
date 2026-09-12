@@ -18,6 +18,7 @@ FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial
 
 STATE_DIR = "state"
 LAST_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_daily_analysis.json")
+CALENDAR_WATCH_STATE_PATH = os.path.join(STATE_DIR, "calendar_watch_state.json")
 
 
 def load_last_analysis():
@@ -48,6 +49,54 @@ def save_last_analysis(date_str, analysis_text):
             json.dump({"date": date_str, "analysis": analysis_text}, f)
     except OSError as e:
         print(f"Could not save analysis state: {e}")
+
+def load_calendar_watch_state():
+    """Reads the set of event keys already alerted on by the calendar watcher,
+    so re-runs every 5 minutes don't re-notify for the same event repeatedly."""
+    try:
+        with open(CALENDAR_WATCH_STATE_PATH, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return set()
+
+
+def save_calendar_watch_state(alerted_keys):
+    """Persists the updated set of already-alerted event keys."""
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(CALENDAR_WATCH_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(sorted(alerted_keys), f)
+    except OSError as e:
+        print(f"Could not save calendar watch state: {e}")
+
+
+def build_quick_calendar_alert(event):
+    """
+    Builds a short, immediate Telegram alert for one newly-confirmed economic
+    event - a bare beat/miss/inline fact check, not an AI-interpreted read.
+    This is the fast layer; the once-a-day brief still does the actual macro
+    interpretation (real yield linkage, positioning, etc).
+    """
+    arrow = ""
+    try:
+        actual_num = float(str(event["actual"]).replace("%", "").replace("K", "").replace(",", ""))
+        forecast_num = float(str(event["forecast"]).replace("%", "").replace("K", "").replace(",", ""))
+        if actual_num > forecast_num:
+            arrow = "\U0001F53A"  # beat
+        elif actual_num < forecast_num:
+            arrow = "\U0001F53B"  # miss
+        else:
+            arrow = "\u2192"  # in line
+    except (ValueError, TypeError):
+        pass  # non-numeric forecast/actual (e.g. "n/a") - just omit the arrow
+
+    return (
+        f"\u26A1 <b>{escape_html(event['title'])}</b> ({escape_html(event['country'])}) {arrow}\n"
+        f"Actual: <b>{escape_html(event['actual'])}</b> | Forecast: {escape_html(event['forecast'])} | "
+        f"Previous: {escape_html(event['previous'])}\n"
+        f"Released: {escape_html(event['time_label'])}"
+    )
+
 
 CARRY_TRADE_FRAMEWORK = (
     "BACKGROUND FRAMEWORK - apply this explicitly whenever relevant, do not just gesture at "
@@ -118,7 +167,15 @@ ANALYSIS_STYLE_GUIDE = (
     "you explicitly in the CURRENT PRICE DATA section below - never invent, round differently, "
     "or state any other specific price level. If that section says price data is unavailable, "
     "do not state any specific price or price range at all - describe direction only in "
-    "relative terms (e.g. 'further downside pressure from current levels')."
+    "relative terms (e.g. 'further downside pressure from current levels').\n\n"
+    "AFTER completing all six sections above, if a TARGETED HEADLINE SEARCH FOR MISSING ACTUALS "
+    "block was provided, append one line per event listed in it, in EXACTLY this format so the "
+    "figure can be captured programmatically for the archive:\n"
+    "EXTRACTED_ACTUAL: <exact event title as given> = <value>\n"
+    "Only extract a value if a headline clearly and specifically states the actual reported "
+    "figure for that exact event. If uncertain, ambiguous, or no headline mentions a figure, "
+    "write UNKNOWN as the value - do not guess a plausible-sounding number. These lines are for "
+    "data capture only and will not be shown to the reader."
 )
 
 SECTION_HEADERS = [
@@ -239,6 +296,49 @@ def build_nav_pills(nav_links):
         for label, url in nav_links
     )
     return f'<div style="text-align:center;padding:14px 0 0;">{pills}</div>'
+
+
+EXTRACTED_ACTUAL_RE = re.compile(r"^EXTRACTED_ACTUAL:\s*(.+?)\s*=\s*(.+)$", re.MULTILINE)
+
+
+def extract_and_strip_actuals(analysis_text):
+    """
+    Pulls out any "EXTRACTED_ACTUAL: <title> = <value>" lines the model
+    appended (per the style guide's trailing instruction), returning the
+    cleaned display text (with those technical lines removed, since readers
+    should never see them) and a dict of {title: value} for any event where
+    a real value - not UNKNOWN - was found.
+    """
+    extracted = {}
+    for title, value in EXTRACTED_ACTUAL_RE.findall(analysis_text):
+        value = value.strip()
+        if value and value.upper() != "UNKNOWN":
+            extracted[title.strip()] = value
+    cleaned = EXTRACTED_ACTUAL_RE.sub("", analysis_text).strip()
+    return cleaned, extracted
+
+
+def apply_extracted_actuals(events, extracted_actuals):
+    """
+    Backfills any released_no_actual event whose title matches a figure the
+    model extracted from targeted news headlines. Matches on title only
+    (case-insensitive) since this is only ever applied to the same day's
+    events that were just searched for - marks the source as "news" so
+    downstream display/archiving can show it's not an officially-confirmed
+    feed figure, just a well-sourced news report of one.
+    """
+    if not events or not extracted_actuals:
+        return events
+    lowered = {k.lower(): v for k, v in extracted_actuals.items()}
+    for e in events:
+        if e["status"] != "released_no_actual":
+            continue
+        match = lowered.get(e["title"].lower())
+        if match:
+            e["actual"] = match
+            e["status"] = "released"
+            e["actual_source"] = "news"
+    return events
 
 
 def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None):
@@ -812,9 +912,10 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
         lines.append("")
         lines.append(f"ALREADY RELEASED {day_word} (actual figure confirmed):")
         for e in released:
+            source_note = " (via news, not the official feed)" if e.get("actual_source") == "news" else ""
             lines.append(
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
-                f"Actual: {e['actual']} | Forecast: {e['forecast']} | Previous: {e['previous']}"
+                f"Actual: {e['actual']}{source_note} | Forecast: {e['forecast']} | Previous: {e['previous']}"
             )
     if released_no_actual:
         lines.append("")
@@ -862,6 +963,9 @@ def save_calendar_archive(date_str, iso_date, events):
     }
     rows = ""
     for e in (events or []):
+        status_display = status_labels.get(e.get("status"), e.get("status", ""))
+        if e.get("status") == "released" and e.get("actual_source") == "news":
+            status_display = "Released (via news)"
         rows += (
             "<tr>"
             f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('time_label', ''))}</td>"
@@ -871,8 +975,7 @@ def save_calendar_archive(date_str, iso_date, events):
             f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('previous') or 'n/a')}</td>"
             f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('forecast') or 'n/a')}</td>"
             f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(e.get('actual') or 'n/a')}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>"
-            f"{escape_html(status_labels.get(e.get('status'), e.get('status', '')))}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{escape_html(status_display)}</td>"
             "</tr>"
         )
     if not rows:
