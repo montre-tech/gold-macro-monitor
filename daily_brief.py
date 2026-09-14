@@ -28,6 +28,8 @@ from lib import (
     fetch_raw_calendar_events,
     select_todays_or_recent_from,
     format_calendar_context,
+    fetch_mql5_calendar_actuals,
+    apply_mql5_actuals,
     extract_and_strip_actuals,
     apply_extracted_actuals,
     load_last_analysis,
@@ -123,6 +125,8 @@ def main():
     # Factory's ~2-requests-per-5-minutes rate limit, which previously caused a
     # hard HTTP 429 failure when this was split across multiple fetches.
     raw_calendar = fetch_raw_calendar_events()
+    mql5_actuals = fetch_mql5_calendar_actuals()
+    raw_calendar = apply_mql5_actuals(raw_calendar, mql5_actuals)
     calendar_events, calendar_is_fallback, calendar_date_label = select_todays_or_recent_from(raw_calendar)
     calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
     targeted_headlines_block = fetch_targeted_headlines_for_missing_actuals(calendar_events)
@@ -167,9 +171,10 @@ def main():
     save_last_analysis(date_str, analysis)
 
     # Backfill any actual figures the model found in news headlines back into the
-    # calendar data itself, so the archive (and this run's own data box) reflect
-    # the discovered figure instead of permanently showing "not reported by feed".
-    calendar_match_date = calendar_events[0]["event_date"] if calendar_events else None
+    # calendar data itself. Since calendar_events shares the same dict objects as
+    # raw_calendar (select_todays_or_recent_from filters, doesn't copy), this
+    # mutation is automatically visible in raw_calendar too - so the archive
+    # below needs no separate re-application step.
     calendar_events = apply_extracted_actuals(calendar_events, extracted_actuals)
     calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
 
@@ -209,13 +214,9 @@ def main():
     # fixed reachback (e.g. 2 days) can miss real events depending on which day
     # of the week the script happens to run (confirmed: 11 real events existed
     # this week but 0 fell within a 2-day-back window from a Saturday run).
-    archive_events = raw_calendar
-    if calendar_match_date:
-        archive_events = apply_extracted_actuals(
-            [e for e in (archive_events or []) if e["event_date"] == calendar_match_date],
-            extracted_actuals,
-        ) + [e for e in (archive_events or []) if e["event_date"] != calendar_match_date]
-    save_calendar_archive(date_str, datetime.date.today().isoformat(), archive_events)
+    # raw_calendar already reflects both the MQL5 and news-headline backfills
+    # applied above (shared dict objects), so no further merging is needed here.
+    save_calendar_archive(date_str, datetime.date.today().isoformat(), raw_calendar)
     rebuild_archive_index()
 
     maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
