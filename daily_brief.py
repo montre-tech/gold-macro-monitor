@@ -26,7 +26,6 @@ from lib import (
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
     fetch_raw_calendar_events,
-    filter_calendar_window,
     select_todays_or_recent_from,
     format_calendar_context,
     extract_and_strip_actuals,
@@ -205,7 +204,12 @@ def main():
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
 
-    archive_events = filter_calendar_window(raw_calendar, days_back=2)
+    # Archive the FULL week's already-fetched data rather than a narrow days_back
+    # window - the raw feed is naturally bounded to "this week" already, and a
+    # fixed reachback (e.g. 2 days) can miss real events depending on which day
+    # of the week the script happens to run (confirmed: 11 real events existed
+    # this week but 0 fell within a 2-day-back window from a Saturday run).
+    archive_events = raw_calendar
     if calendar_match_date:
         archive_events = apply_extracted_actuals(
             [e for e in (archive_events or []) if e["event_date"] == calendar_match_date],
