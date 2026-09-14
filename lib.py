@@ -711,53 +711,35 @@ def current_display_timestamp():
     return now_display.strftime("%b %d, %Y - %H:%M") + f" {DISPLAY_TZ_LABEL}"
 
 
-def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days_back=0):
+def fetch_raw_calendar_events(currencies=("USD", "JPY"), min_impact="Medium"):
     """
     Fetches this week's economic calendar from Forex Factory's public export
     feed - the same free, key-less JSON feed countless MT4/MT5 news-filter
-    EAs use.
+    EAs use - and returns EVERY matching (currency + impact) event across the
+    whole week, with NO date-window restriction applied yet. This makes
+    exactly ONE network call.
 
-    Filters down to events from TODAY back through `days_back` prior days
-    (today defined in DISPLAY_TZ_OFFSET_HOURS, not UTC - a naive UTC-string-
-    prefix match was fragile right around midnight and could silently drop
-    events) for the given currencies at Medium/High impact, and classifies
-    each into one of three buckets using TWO independent signals rather than
-    trusting FF's "actual" field alone (that field does not reliably populate
-    promptly on this feed):
+    IMPORTANT: this function must only be called ONCE per script run. This
+    feed is rate-limited by Forex Factory to ~2 requests per 5 minutes per
+    IP - a caller that needs several different date views (today, a weekend
+    fallback, a multi-day archive window) must fetch once here and then use
+    filter_calendar_window()/select_todays_or_recent_from() below to derive
+    each view in memory, rather than calling this function again. An earlier
+    version called the network 2-3 times per run and got hard-blocked with
+    an HTTP 429 as a direct result - that failure mode is exactly what this
+    split exists to prevent.
+
+    Each event is classified into one of three statuses using TWO
+    independent signals rather than trusting FF's "actual" field alone (that
+    field does not reliably populate promptly on this feed):
     - released: actual figure IS populated - the clean, fully-confirmed case.
-    - released_no_actual: scheduled time has already passed (with a 10-minute
+    - released_no_actual: scheduled time has already passed (10-minute
       buffer) but FF hasn't populated an actual figure yet.
     - upcoming: scheduled time is still in the future.
 
-    days_back=0 (default) is used for the live daily brief - only today's
-    events matter for today's positioning decision. A larger days_back is
-    used when building the calendar archive, so a later run can pick up
-    actual figures that arrived late for recent days, even if the original
-    day's snapshot missed them - the archive "catches up" over the next
-    couple of days instead of being permanently frozen with a gap.
-
-    KNOWN LIMITATION: this feed only contains THIS calendar week's events, so
-    a days_back window that crosses back into the previous week (e.g.
-    querying on a Monday or Tuesday) will not find those earlier events. This
-    is a disclosed tradeoff, not a bug - fetching last week's feed too would
-    fix it but isn't implemented here to keep this to one request per call.
-
-    Rate limit note (from Forex Factory's own guidance): this feed is limited
-    to roughly 2 requests per 5 minutes per IP - fine for a couple of calls
-    per scheduled run, but don't call this on every tick of anything more
-    frequent than that.
-
-    Returns a list of event dicts, or None if the fetch/parse fails. Prints a
-    diagnostic count of total-vs-filtered events either way, plus the raw
-    field data for any event that lands in released_no_actual, so a "the site
-    shows it but we don't" report can be diagnosed from the Actions log
-    instead of guessing again.
+    Returns a list of event dicts (each with an "event_date" ISO string for
+    later filtering), or None if the fetch/parse fails.
     """
-    # Cache-busting query param: this mirror sits behind a CDN, and long-time
-    # users of this exact feed have reported it can keep serving a stale
-    # cached snapshot for a while after Forex Factory's origin has already
-    # posted a new actual figure. A changing param forces a fresh fetch
-    # instead of a cached one.
     url = f"https://nfs.faireconomy.media/ff_calendar_thisweek.json?nocache={int(time.time())}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
@@ -775,8 +757,6 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
 
     display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
     now_display = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz)
-    today_display_date = now_display.date()
-    earliest_display_date = today_display_date - datetime.timedelta(days=days_back)
     occurred_buffer = datetime.timedelta(minutes=10)
 
     impact_rank = {"Low": 0, "Medium": 1, "High": 2}
@@ -784,6 +764,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
 
     results = []
     skipped_unparsed = 0
+    matched_currency_impact = 0
     for ev in events:
         try:
             country = ev.get("country", "")
@@ -792,6 +773,7 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
             impact = ev.get("impact", "Low")
             if impact_rank.get(impact, 0) < min_rank:
                 continue
+            matched_currency_impact += 1
 
             raw_date = ev.get("date", "") or ""
             try:
@@ -802,9 +784,6 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
             if event_dt.tzinfo is None:
                 event_dt = event_dt.replace(tzinfo=datetime.timezone.utc)
             event_dt_display = event_dt.astimezone(display_tz)
-
-            if not (earliest_display_date <= event_dt_display.date() <= today_display_date):
-                continue
 
             actual = (ev.get("actual") or "").strip()
             has_actual = bool(actual)
@@ -837,38 +816,61 @@ def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days
             continue
 
     print(
-        f"Economic calendar: fetched {len(events)} total events, {len(results)} passed "
-        f"filters for today ({DISPLAY_TZ_LABEL}); {skipped_unparsed} had unparseable dates."
+        f"Economic calendar: fetched {len(events)} total events this week, "
+        f"{matched_currency_impact} matched currency/impact filters, {len(results)} parsed "
+        f"successfully ({skipped_unparsed} had unparseable dates)."
     )
     return results
 
 
-def fetch_todays_or_recent_calendar(currencies=("USD", "JPY"), min_impact="Medium", max_lookback=4):
+def filter_calendar_window(raw_events, days_back=0):
     """
-    Fetches today's calendar events; if there are none - which is EXPECTED
-    and normal on weekends/holidays, not an error - automatically falls back
-    to the most recent day within max_lookback that did have events, so a
-    Saturday/Sunday report still carries Friday's releases as relevant
-    context instead of a blank "nothing today" that ignores what the market
-    is actually still digesting.
+    Pure in-memory filter (no network call) - narrows an already-fetched
+    fetch_raw_calendar_events() list down to events from today back through
+    `days_back` prior days (today defined in DISPLAY_TZ_OFFSET_HOURS).
 
-    Returns (events, is_fallback, events_date_label):
-    - events: the list for whichever day was used (today or the fallback day)
-    - is_fallback: False if these are genuinely today's events, True if this
-      is a fallback to an earlier day
-    - events_date_label: human-readable date string for that day (e.g. "Sep
-      11, 2026"), or None if no data was available at all
+    KNOWN LIMITATION: the raw feed only contains THIS calendar week's events,
+    so a days_back window that crosses back into the previous week (e.g.
+    filtering on a Monday or Tuesday) will not find those earlier events -
+    that data was never fetched in the first place, since it lives in a
+    different weekly file. Disclosed tradeoff, not a bug.
     """
-    today_events = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=0)
-    if today_events is None:
+    if raw_events is None:
+        return None
+    display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+    today = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz).date()
+    earliest = today - datetime.timedelta(days=days_back)
+    filtered = [e for e in raw_events if earliest <= datetime.date.fromisoformat(e["event_date"]) <= today]
+    print(f"Economic calendar: {len(filtered)} of {len(raw_events)} events fall within the "
+          f"requested {days_back}-day-back window.")
+    return filtered
+
+
+def select_todays_or_recent_from(raw_events, max_lookback=4):
+    """
+    Pure in-memory selection (no network call) - given an already-fetched
+    fetch_raw_calendar_events() list, returns today's events, or - if today
+    has none, which is EXPECTED and normal on weekends/holidays, not an
+    error - falls back to the most recent day within max_lookback that did
+    have events, so a Saturday/Sunday report still carries Friday's releases
+    as relevant context instead of a blank "nothing today".
+
+    Returns (events, is_fallback, events_date_label) - see
+    fetch_todays_or_recent_calendar's old docstring for the field meanings
+    (kept identical for compatibility with existing callers).
+    """
+    if raw_events is None:
         return None, False, None
-    if today_events:
-        today_label = datetime.datetime.now(
-            datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
-        ).strftime("%b %d, %Y")
-        return today_events, False, today_label
 
-    wider = fetch_economic_calendar(currencies=currencies, min_impact=min_impact, days_back=max_lookback)
+    display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+    today = datetime.datetime.now(datetime.timezone.utc).astimezone(display_tz).date()
+
+    today_events = [e for e in raw_events if e["event_date"] == today.isoformat()]
+    if today_events:
+        return today_events, False, today.strftime("%b %d, %Y")
+
+    earliest = today - datetime.timedelta(days=max_lookback)
+    wider = [e for e in raw_events if earliest <= datetime.date.fromisoformat(e["event_date"]) <= today]
     if not wider:
         return [], False, None
 
@@ -876,6 +878,35 @@ def fetch_todays_or_recent_calendar(currencies=("USD", "JPY"), min_impact="Mediu
     recent_events = [e for e in wider if e["event_date"] == most_recent_date]
     recent_label = datetime.datetime.fromisoformat(most_recent_date).strftime("%b %d, %Y")
     return recent_events, True, recent_label
+
+
+def fetch_economic_calendar(currencies=("USD", "JPY"), min_impact="Medium", days_back=0):
+    """
+    Convenience wrapper for callers that only need ONE calendar view per run
+    (e.g. calendar_watcher.py, which only ever wants today's events). Does a
+    single fetch_raw_calendar_events() call plus one filter_calendar_window()
+    call. Do NOT use this if you need multiple different date-window views in
+    the same run - call fetch_raw_calendar_events() once yourself and derive
+    each view with filter_calendar_window()/select_todays_or_recent_from()
+    instead, to avoid the multi-call rate-limit problem this split fixes.
+    """
+    raw = fetch_raw_calendar_events(currencies=currencies, min_impact=min_impact)
+    if raw is None:
+        return None
+    return filter_calendar_window(raw, days_back=days_back)
+
+
+def fetch_todays_or_recent_calendar(currencies=("USD", "JPY"), min_impact="Medium", max_lookback=4):
+    """
+    Convenience wrapper for callers that only need this ONE view per run.
+    Do NOT use this together with fetch_economic_calendar() or another call
+    to this function in the same run - that reintroduces the multi-call
+    rate-limit problem. If you need this view AND an archive window in the
+    same run, call fetch_raw_calendar_events() once and derive both views
+    with select_todays_or_recent_from()/filter_calendar_window() instead.
+    """
+    raw = fetch_raw_calendar_events(currencies=currencies, min_impact=min_impact)
+    return select_todays_or_recent_from(raw, max_lookback=max_lookback)
 
 
 def format_calendar_context(events, is_fallback=False, events_date_label=None):
