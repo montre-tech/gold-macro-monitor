@@ -943,7 +943,12 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
         lines.append("")
         lines.append(f"ALREADY RELEASED {day_word} (actual figure confirmed):")
         for e in released:
-            source_note = " (via news, not the official feed)" if e.get("actual_source") == "news" else ""
+            if e.get("actual_source") == "mql5":
+                source_note = " (via MQL5 calendar, not the FF feed)"
+            elif e.get("actual_source") == "news":
+                source_note = " (via news, not the official feed)"
+            else:
+                source_note = ""
             lines.append(
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Actual: {e['actual']}{source_note} | Forecast: {e['forecast']} | Previous: {e['previous']}"
@@ -995,7 +1000,9 @@ def save_calendar_archive(date_str, iso_date, events):
     rows = ""
     for e in (events or []):
         status_display = status_labels.get(e.get("status"), e.get("status", ""))
-        if e.get("status") == "released" and e.get("actual_source") == "news":
+        if e.get("status") == "released" and e.get("actual_source") == "mql5":
+            status_display = "Released (via MQL5)"
+        elif e.get("status") == "released" and e.get("actual_source") == "news":
             status_display = "Released (via news)"
         rows += (
             "<tr>"
@@ -1173,6 +1180,102 @@ def maybe_send_telegram(message_text):
             print("Telegram message sent.")
     except (requests.RequestException, ValueError) as e:
         print(f"Telegram send failed: {e}")
+
+
+MQL5_DIV_RE = re.compile(r'<div class="ec-table__item ec-table__item_inline">(.*?)</div>', re.DOTALL)
+MQL5_TAG_RE = re.compile(r'<[^>]+>')
+MQL5_ROW_RE = re.compile(
+    r'^(\d{4}\.\d{2}\.\d{2}) (\d{2}:\d{2}), ([A-Z]{3}), ([^,]+?)'
+    r'(?:, Actual: ([^,]+))?(?:, Forecast: ([^,]+))?(?:, Previous: ([^,]+))?\s*$'
+)
+
+
+def fetch_mql5_calendar_actuals(currencies=("USD", "JPY")):
+    """
+    Scrapes MQL5's public economic calendar page for actual/forecast/previous
+    figures, as a direct numeric backfill source for actuals Forex Factory's
+    feed doesn't reliably provide - preferred over LLM-extracted news-headline
+    figures since it's a structured number straight from the source, not an
+    inference over freeform text.
+
+    Confirmed working against real page markup: each event is a
+    <div class="ec-table__item ec-table__item_inline"> containing plain text
+    "YYYY.MM.DD HH:MM, CCY, Title, Actual: X, Forecast: Y, Previous: Z" (any
+    of the three value fields may be absent). This is HTML scraping of an
+    unofficial page (no documented API), so it's inherently more fragile than
+    an API and could silently break if MQL5 changes their markup - the
+    diagnostic line below exists specifically so a future break shows up
+    immediately as "0 rows parsed" in the log rather than silently returning
+    nothing forever.
+
+    Returns a dict {(event_date_iso, title_lower): {"actual":, "forecast":,
+    "previous":}}, or None if the page fetch itself fails entirely (an empty
+    dict, as opposed to None, means the fetch worked but nothing matched -
+    itself a useful diagnostic signal).
+    """
+    url = "https://www.mql5.com/en/economic-calendar"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            print(f"MQL5 calendar fetch failed: HTTP {resp.status_code}")
+            return None
+        html_text = resp.text
+    except requests.RequestException as e:
+        print(f"MQL5 calendar fetch failed: {e}")
+        return None
+
+    divs = MQL5_DIV_RE.findall(html_text)
+    results = {}
+    parsed_count = 0
+    for raw in divs:
+        text = MQL5_TAG_RE.sub("", raw).strip()
+        text = text.replace("&amp;", "&").replace("&nbsp;", " ")
+        m = MQL5_ROW_RE.match(text)
+        if not m:
+            continue
+        date_str, _time_str, ccy, title, actual, forecast, previous = m.groups()
+        if ccy not in currencies:
+            continue
+        try:
+            event_date_iso = datetime.datetime.strptime(date_str, "%Y.%m.%d").date().isoformat()
+        except ValueError:
+            continue
+        parsed_count += 1
+        results[(event_date_iso, title.strip().lower())] = {
+            "actual": actual.strip() if actual else None,
+            "forecast": forecast.strip() if forecast else None,
+            "previous": previous.strip() if previous else None,
+        }
+
+    print(
+        f"MQL5 calendar: found {len(divs)} row div(s) on the page, parsed {parsed_count} "
+        f"successfully, {len(results)} matched currencies {currencies}."
+    )
+    return results
+
+
+def apply_mql5_actuals(events, mql5_data):
+    """
+    Backfills any released_no_actual event using MQL5's calendar scrape,
+    matching on (event_date, title) case-insensitively. Marks the source as
+    "mql5" so downstream display/archiving can distinguish it from an
+    officially-confirmed FF feed figure or a news-headline-derived one -
+    MQL5 is a direct numeric source, more trustworthy than an LLM's read of
+    a news headline, but still not the original FF feed's own confirmation.
+    """
+    if not events or not mql5_data:
+        return events
+    for e in events:
+        if e["status"] != "released_no_actual":
+            continue
+        key = (e["event_date"], e["title"].strip().lower())
+        match = mql5_data.get(key)
+        if match and match.get("actual"):
+            e["actual"] = match["actual"]
+            e["status"] = "released"
+            e["actual_source"] = "mql5"
+    return events
 
 
 def maybe_send_email(subject, plain_text, html_body):
