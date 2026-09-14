@@ -1,4 +1,126 @@
 {
   "date": "Sep 14, 2026",
-  "events": []
+  "events": [
+    {
+      "title": "Core Retail Sales m/m",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "0.5%",
+      "previous": "-0.3%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Retail Sales m/m",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "0.8%",
+      "previous": "-0.6%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Federal Funds Rate",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 21:00 GMT+3",
+      "impact": "High",
+      "forecast": "4.00%",
+      "previous": "3.75%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "FOMC Economic Projections",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 21:00 GMT+3",
+      "impact": "High",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "FOMC Statement",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 21:00 GMT+3",
+      "impact": "High",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "FOMC Press Conference",
+      "country": "USD",
+      "event_date": "2026-09-16",
+      "time_label": "Sep 16, 21:30 GMT+3",
+      "impact": "High",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Philly Fed Manufacturing Index",
+      "country": "USD",
+      "event_date": "2026-09-17",
+      "time_label": "Sep 17, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "28.9",
+      "previous": "47.4",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Unemployment Claims",
+      "country": "USD",
+      "event_date": "2026-09-17",
+      "time_label": "Sep 17, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "209K",
+      "previous": "206K",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "BOJ Policy Rate",
+      "country": "JPY",
+      "event_date": "2026-09-18",
+      "time_label": "Sep 18, 05:30 GMT+3",
+      "impact": "High",
+      "forecast": "<1.25%",
+      "previous": "<1.00%",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Monetary Policy Statement",
+      "country": "JPY",
+      "event_date": "2026-09-18",
+      "time_label": "Sep 18, 05:30 GMT+3",
+      "impact": "High",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "BOJ Press Conference",
+      "country": "JPY",
+      "event_date": "2026-09-18",
+      "time_label": "Sep 18, 08:30 GMT+3",
+      "impact": "High",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    }
+  ]
 }
