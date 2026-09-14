@@ -28,6 +28,8 @@ from lib import (
     fetch_raw_calendar_events,
     select_todays_or_recent_from,
     format_calendar_context,
+    fetch_mql5_calendar_actuals,
+    apply_mql5_actuals,
     extract_and_strip_actuals,
     apply_extracted_actuals,
     load_last_analysis,
