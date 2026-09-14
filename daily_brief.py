@@ -25,8 +25,9 @@ from lib import (
     format_price_context,
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
-    fetch_economic_calendar,
-    fetch_todays_or_recent_calendar,
+    fetch_raw_calendar_events,
+    filter_calendar_window,
+    select_todays_or_recent_from,
     format_calendar_context,
     extract_and_strip_actuals,
     apply_extracted_actuals,
@@ -117,7 +118,13 @@ def main():
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
 
-    calendar_events, calendar_is_fallback, calendar_date_label = fetch_todays_or_recent_calendar()
+    # Fetch the raw calendar ONCE for this whole run - both the live view and the
+    # archive window get derived from this same list in memory, no repeat network
+    # calls. Calling the calendar feed more than once per run risks Forex
+    # Factory's ~2-requests-per-5-minutes rate limit, which previously caused a
+    # hard HTTP 429 failure when this was split across multiple fetches.
+    raw_calendar = fetch_raw_calendar_events()
+    calendar_events, calendar_is_fallback, calendar_date_label = select_todays_or_recent_from(raw_calendar)
     calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
     targeted_headlines_block = fetch_targeted_headlines_for_missing_actuals(calendar_events)
 
@@ -198,7 +205,7 @@ def main():
     with open(f"docs/archive/daily-{datetime.date.today().isoformat()}.html", "w", encoding="utf-8") as f:
         f.write(html_out_archived)
 
-    archive_events = fetch_economic_calendar(days_back=2)
+    archive_events = filter_calendar_window(raw_calendar, days_back=2)
     if calendar_match_date:
         archive_events = apply_extracted_actuals(
             [e for e in (archive_events or []) if e["event_date"] == calendar_match_date],
