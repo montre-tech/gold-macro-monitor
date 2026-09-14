@@ -79,11 +79,22 @@ def fetch_targeted_headlines_for_missing_actuals(calendar_events, max_events=5):
     if not missing:
         return ""
 
+    searched = missing[:max_events]
+    skipped = missing[max_events:]
+    print(
+        f"Targeted headline search: {len(missing)} event(s) missing an actual, "
+        f"searching {len(searched)} (cap={max_events}), skipping {len(skipped)} due to the cap."
+    )
+    if skipped:
+        print(f"Skipped due to cap: {[e['title'] for e in skipped]}")
+
     blocks = []
-    for e in missing[:max_events]:
+    for e in searched:
         country_name = COUNTRY_SEARCH_NAMES.get(e["country"], e["country"])
         query = f'{country_name} {e["title"]} actual result'
         headlines = fetch_news(query, max_items=4)
+        headline_count = len(headlines.splitlines()) if headlines else 0
+        print(f'Targeted search "{query}" -> {headline_count} headline(s) found.')
         blocks.append(
             f'Search for "{e["title"]}" ({e["country"]}):\n' +
             (headlines or "  (no relevant headlines found)")
