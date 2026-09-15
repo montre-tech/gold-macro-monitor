@@ -41,10 +41,6 @@ from lib import (
     escape_html,
 )
 
-# EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
-# used to build the "read the full brief" link sent to Telegram.
-PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
-
 NEWS_QUERIES = [
     "Federal Reserve interest rate decision",
     "Bank of Japan yen intervention",
@@ -270,9 +266,7 @@ def main():
 
     maybe_send_email(email_subject, analysis, html_out)
 
-    telegram_digest = build_telegram_digest(
-        "Daily Gold / Macro Brief", telegram_subtitle, sections, PAGES_BASE_URL + "daily.html"
-    )
+    telegram_digest = build_telegram_digest("Daily Gold / Macro Brief", telegram_subtitle, sections)
     maybe_send_telegram(telegram_digest)
 
 
