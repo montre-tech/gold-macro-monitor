@@ -2,6 +2,17 @@
   "date": "Sep 15, 2026",
   "events": [
     {
+      "title": "Treasury Sec Bessent Speaks",
+      "country": "USD",
+      "event_date": "2026-09-15",
+      "time_label": "Sep 15, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
       "title": "Core Retail Sales m/m",
       "country": "USD",
       "event_date": "2026-09-16",
