@@ -16,6 +16,7 @@ from lib import (
     CARRY_TRADE_FRAMEWORK,
     ANALYSIS_STYLE_GUIDE,
     ask_gemini,
+    is_gemini_error,
     parse_sections,
     build_newsletter_html,
     build_telegram_digest,
@@ -164,22 +165,62 @@ def main():
     )
 
     analysis_raw = ask_gemini(prompt)
-    analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
     date_str = datetime.date.today().strftime("%b %d, %Y")
     page_timestamp = current_display_timestamp()
-    sections = parse_sections(analysis)
-    save_last_analysis(date_str, analysis)
+    warning_banner = None
 
-    # Backfill any actual figures the model found in news headlines back into the
-    # calendar data itself. Since calendar_events shares the same dict objects as
-    # raw_calendar (select_todays_or_recent_from filters, doesn't copy), this
-    # mutation is automatically visible in raw_calendar too - so the archive
-    # below needs no separate re-application step.
-    calendar_events = apply_extracted_actuals(calendar_events, extracted_actuals)
-    calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
+    if is_gemini_error(analysis_raw):
+        print(f"Gemini call failed this run: {analysis_raw}")
+        cached = load_last_analysis()
+        if cached and cached.get("analysis"):
+            # Fall back to the last successful report, clearly labeled as cached,
+            # instead of publishing/sending the raw error text as if it were real
+            # analysis. Reuse that day's own price/setup/calendar context too, so
+            # the whole report stays internally consistent as an explicit replay -
+            # not today's fresh numbers paired with yesterday's stale narrative.
+            analysis = cached["analysis"]
+            sections = parse_sections(analysis)
+            price_block = cached.get("price_block", price_block)
+            setup_note = cached.get("setup_note", setup_note)
+            calendar_block = cached.get("calendar_block", calendar_block)
+            cached_label = cached.get("page_timestamp") or cached.get("date", "an earlier run")
+            warning_banner = (
+                f"AI analysis service was unavailable this run ({analysis_raw[:120]}). Showing the "
+                f"last successful report instead, originally generated {cached_label}. Treat all "
+                f"figures and dates below as reflecting that earlier time, not now."
+            )
+            # Do NOT call save_last_analysis here - the state file must keep pointing
+            # at the true last-fresh day, or tomorrow's continuity messaging (and any
+            # further fallback) would lose track of what was actually last generated.
+        else:
+            print("No cached report available to fall back to - skipping publish entirely this run.")
+            maybe_send_telegram(
+                "\u26A0\uFE0F <b>Daily brief failed to generate</b>\n"
+                f"AI analysis service was unavailable ({escape_html(analysis_raw[:200])}) and no cached "
+                "report exists to fall back to. No report was published this run."
+            )
+            return
+    else:
+        analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
+        sections = parse_sections(analysis)
+
+        # Backfill any actual figures the model found in news headlines back into the
+        # calendar data itself. Since calendar_events shares the same dict objects as
+        # raw_calendar (select_todays_or_recent_from filters, doesn't copy), this
+        # mutation is automatically visible in raw_calendar too - so the archive
+        # below needs no separate re-application step.
+        calendar_events = apply_extracted_actuals(calendar_events, extracted_actuals)
+        calendar_block = format_calendar_context(calendar_events, calendar_is_fallback, calendar_date_label)
+
+        save_last_analysis(date_str, analysis, extra={
+            "page_timestamp": page_timestamp,
+            "price_block": price_block,
+            "setup_note": setup_note,
+            "calendar_block": calendar_block,
+        })
 
     data_box_html = ""
-    if price_data:
+    if price_data or warning_banner:
         data_box_html = (
             '<div style="font-family:monospace;font-size:12px;color:#444;background:#f4f4f4;'
             'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:8px;">'
@@ -195,12 +236,14 @@ def main():
     html_out = build_newsletter_html(
         "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, analysis, data_box_html,
         nav_links=[("Weekly COT →", "weekly.html"), ("Archive", "archive/"), ("Home", "index.html")],
+        warning_banner=warning_banner,
     )
     # Archive copies live one folder deeper (docs/archive/), so their nav links need
     # a "../" prefix to point back to the top-level pages correctly.
     html_out_archived = build_newsletter_html(
         "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, analysis, data_box_html,
         nav_links=[("Weekly COT →", "../weekly.html"), ("Archive", "."), ("Home", "../index.html")],
+        warning_banner=warning_banner,
     )
 
     os.makedirs("docs/archive", exist_ok=True)
@@ -219,10 +262,16 @@ def main():
     save_calendar_archive(date_str, datetime.date.today().isoformat(), raw_calendar)
     rebuild_archive_index()
 
-    maybe_send_email("Daily Gold/Macro Brief - " + date_str, analysis, html_out)
+    email_subject = "Daily Gold/Macro Brief - " + date_str
+    telegram_subtitle = f"Generated {page_timestamp}"
+    if warning_banner:
+        email_subject = "[CACHED] " + email_subject
+        telegram_subtitle = f"\u26A0\uFE0F CACHED - {telegram_subtitle}"
+
+    maybe_send_email(email_subject, analysis, html_out)
 
     telegram_digest = build_telegram_digest(
-        "Daily Gold / Macro Brief", f"Generated {page_timestamp}", sections, PAGES_BASE_URL + "daily.html"
+        "Daily Gold / Macro Brief", telegram_subtitle, sections, PAGES_BASE_URL + "daily.html"
     )
     maybe_send_telegram(telegram_digest)
 
