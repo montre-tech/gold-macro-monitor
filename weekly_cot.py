@@ -26,10 +26,6 @@ from lib import (
     current_display_timestamp,
 )
 
-# EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
-# used to build the "read the full analysis" link sent to Telegram.
-PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
-
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
 
@@ -203,9 +199,7 @@ def main():
         html_out,
     )
 
-    telegram_digest = build_telegram_digest(
-        "Weekly Gold COT Analysis", telegram_subtitle, sections, PAGES_BASE_URL + "weekly.html"
-    )
+    telegram_digest = build_telegram_digest("Weekly Gold COT Analysis", telegram_subtitle, sections)
     maybe_send_telegram(telegram_digest)
 
 
