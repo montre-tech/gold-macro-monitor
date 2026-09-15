@@ -13,19 +13,22 @@ from lib import (
     CARRY_TRADE_FRAMEWORK,
     ANALYSIS_STYLE_GUIDE,
     ask_gemini,
+    is_gemini_error,
     parse_sections,
     build_newsletter_html,
     build_telegram_digest,
     maybe_send_telegram,
     escape_html,
     maybe_send_email,
+    load_last_weekly_analysis,
+    save_last_weekly_analysis,
     rebuild_archive_index,
     current_display_timestamp,
 )
 
 # EDIT THIS to your actual GitHub Pages URL (Settings -> Pages shows it) -
 # used to build the "read the full analysis" link sent to Telegram.
-PAGES_BASE_URL = "https://montre-tech.github.io/gold-macro-monitor/"
+PAGES_BASE_URL = "https://YOURUSERNAME.github.io/YOURREPO/"
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
@@ -129,21 +132,55 @@ def main():
         "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary
     )
 
-    analysis = ask_gemini(prompt)
-    sections = parse_sections(analysis)
+    analysis_raw = ask_gemini(prompt)
+    page_subtitle = f"COT data as of {latest['date']} \u00b7 generated {current_display_timestamp()}"
+    warning_banner = None
+
+    if is_gemini_error(analysis_raw):
+        print(f"Gemini call failed this run: {analysis_raw}")
+        cached = load_last_weekly_analysis()
+        if cached and cached.get("analysis"):
+            analysis = cached["analysis"]
+            sections = parse_sections(analysis)
+            data_summary = cached.get("data_summary", data_summary)
+            cached_label = cached.get("page_subtitle") or cached.get("date", "an earlier run")
+            warning_banner = (
+                f"AI analysis service was unavailable this run ({analysis_raw[:120]}). Showing the "
+                f"last successful weekly report instead, originally generated {cached_label}. Treat "
+                f"all figures below as reflecting that earlier report, not this week's data."
+            )
+            # Do NOT call save_last_weekly_analysis here - keep the state pointing at
+            # the true last-fresh report, not this repeated fallback.
+        else:
+            print("No cached weekly report available to fall back to - skipping publish entirely this run.")
+            maybe_send_telegram(
+                "\u26A0\uFE0F <b>Weekly COT analysis failed to generate</b>\n"
+                f"AI analysis service was unavailable ({escape_html(analysis_raw[:200])}) and no cached "
+                "report exists to fall back to. No report was published this run."
+            )
+            return
+    else:
+        analysis = analysis_raw
+        sections = parse_sections(analysis)
+        save_last_weekly_analysis(latest["date"], analysis, extra={
+            "page_subtitle": page_subtitle,
+            "data_summary": data_summary,
+        })
+
     data_box_html = (
         '<div style="font-family:monospace;font-size:12px;color:#444;background:#f4f4f4;'
         'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
         + escape_html(data_summary) + "</div>"
     )
-    page_subtitle = f"COT data as of {latest['date']} \u00b7 generated {current_display_timestamp()}"
     html_out = build_newsletter_html(
         "Weekly Gold COT Analysis", page_subtitle, sections, analysis, data_box_html,
         nav_links=[("Daily Brief →", "daily.html"), ("Archive", "archive/"), ("Home", "index.html")],
+        warning_banner=warning_banner,
     )
     html_out_archived = build_newsletter_html(
         "Weekly Gold COT Analysis", page_subtitle, sections, analysis, data_box_html,
         nav_links=[("Daily Brief →", "../daily.html"), ("Archive", "."), ("Home", "../index.html")],
+        warning_banner=warning_banner,
     )
 
     os.makedirs("docs/archive", exist_ok=True)
@@ -154,14 +191,20 @@ def main():
 
     rebuild_archive_index()
 
+    email_subject = "Weekly Gold COT Analysis - " + latest["date"]
+    telegram_subtitle = page_subtitle
+    if warning_banner:
+        email_subject = "[CACHED] " + email_subject
+        telegram_subtitle = f"\u26A0\uFE0F CACHED - {page_subtitle}"
+
     maybe_send_email(
-        "Weekly Gold COT Analysis - " + latest["date"],
+        email_subject,
         data_summary + "\n\n---\n\n" + analysis,
         html_out,
     )
 
     telegram_digest = build_telegram_digest(
-        "Weekly Gold COT Analysis", page_subtitle, sections, PAGES_BASE_URL + "weekly.html"
+        "Weekly Gold COT Analysis", telegram_subtitle, sections, PAGES_BASE_URL + "weekly.html"
     )
     maybe_send_telegram(telegram_digest)
 
