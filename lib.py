@@ -1175,31 +1175,27 @@ def rebuild_archive_index():
         print(f"Could not write archive index: {e}")
 
 
-def build_telegram_digest(title, subtitle, sections, page_url):
+def build_telegram_digest(title, subtitle, sections):
     """
-    Builds a Telegram-safe message. Telegram's HTML parse_mode only supports a
-    small tag subset (b, i, u, s, a, code, pre) - not full CSS/divs like the
-    email/web version - so this sends a short digest (quick-take + calendar
-    preview) plus a link to the full styled page, rather than trying to cram
-    the whole newsletter into a chat bubble.
+    Builds a Telegram-safe message containing only the Directional View and
+    Economic Calendar & Positioning sections in full - not a link-out digest.
+    Telegram's HTML parse_mode only supports a small tag subset (b, i, u, s,
+    a, code, pre), so styling here is limited to bold labels, not the full
+    CSS/card layout of the email/web version.
     """
     lines = [f"<b>{escape_html(title)}</b>", escape_html(subtitle), ""]
 
     if "direction" in sections:
         c = direction_color(sections["direction"])
-        first_sentence = re.split(r"[.!?]", sections["direction"])[0].strip()
-        lines.append(f"\U0001F3AF <b>{c['label']}</b>")
-        lines.append(escape_html(first_sentence) + ".")
+        lines.append(f"\U0001F3AF <b>Directional View \u2014 {c['label']}</b>")
+        lines.append(escape_html(sections["direction"]))
         lines.append("")
 
     if "calendar" in sections:
-        cal_preview = sections["calendar"][:300]
-        lines.append("\U0001F4C5 <b>Calendar &amp; Positioning</b>")
-        lines.append(escape_html(cal_preview) + ("..." if len(sections["calendar"]) > 300 else ""))
-        lines.append("")
+        lines.append("\U0001F4C5 <b>Economic Calendar &amp; Positioning</b>")
+        lines.append(escape_html(sections["calendar"]))
 
-    lines.append(f'<a href="{escape_html(page_url)}">Read the full brief \u2192</a>')
-    return "\n".join(lines)
+    return "\n".join(lines).strip()
 
 
 def maybe_send_telegram(message_text):
