@@ -18,37 +18,77 @@ FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial
 
 STATE_DIR = "state"
 LAST_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_daily_analysis.json")
+LAST_WEEKLY_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_weekly_analysis.json")
 CALENDAR_WATCH_STATE_PATH = os.path.join(STATE_DIR, "calendar_watch_state.json")
 
+# Prefixes ask_gemini() returns on failure (see that function) - checked against
+# the start of its return value to distinguish a genuine analysis from an error
+# string, so a failed call never gets treated as real content and published.
+GEMINI_ERROR_PREFIXES = ("[Gemini error:", "[Gemini request failed:", "[Could not parse Gemini response:")
 
-def load_last_analysis():
-    """
-    Reads yesterday's stored daily analysis for continuity, since GitHub
-    Actions runs are stateless between invocations otherwise - each run
-    would treat the market as if it had no memory of the previous day.
-    Returns {"date": str, "analysis": str} or None if not found/unreadable
-    (e.g. first-ever run).
-    """
+
+def is_gemini_error(text):
+    """True if ask_gemini()'s return value is an error message, not real analysis."""
+    return isinstance(text, str) and text.strip().startswith(GEMINI_ERROR_PREFIXES)
+
+
+def _load_json_state(path):
     try:
-        with open(LAST_ANALYSIS_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
 
 
-def save_last_analysis(date_str, analysis_text):
-    """
-    Persists today's analysis so tomorrow's run can reference it. This is a
-    rolling single-day memory that overwrites the previous entry, not an
-    accumulating log - the dated copies in docs/archive/ already serve as
-    the full history if you want to look further back.
-    """
+def _save_json_state(path, data):
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
-        with open(LAST_ANALYSIS_PATH, "w", encoding="utf-8") as f:
-            json.dump({"date": date_str, "analysis": analysis_text}, f)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
     except OSError as e:
-        print(f"Could not save analysis state: {e}")
+        print(f"Could not save state to {path}: {e}")
+
+
+def load_last_analysis():
+    """
+    Reads yesterday's stored daily report for continuity AND as a fallback if
+    today's Gemini call fails, since GitHub Actions runs are stateless
+    otherwise. Returns a dict with at least {"date", "analysis"} - plus
+    whatever extra report context (price_block, setup_note, calendar_block,
+    page_timestamp) was saved alongside it, so a failed day can fully replay
+    the last successful report rather than just its text - or None if not
+    found/unreadable (e.g. first-ever run).
+    """
+    return _load_json_state(LAST_ANALYSIS_PATH)
+
+
+def save_last_analysis(date_str, analysis_text, extra=None):
+    """
+    Persists today's report (analysis text plus optional extra context like
+    price_block/setup_note/calendar_block/page_timestamp) so tomorrow's run
+    can reference it for continuity, or fall back to it entirely if its own
+    Gemini call fails. Rolling single-day memory - overwrites the previous
+    entry. Only call this after a GENUINE successful analysis; a fallback run
+    that reused cached content must not overwrite this with its own copy, or
+    future continuity messaging would lose track of the true last-fresh day.
+    """
+    data = {"date": date_str, "analysis": analysis_text}
+    if extra:
+        data.update(extra)
+    _save_json_state(LAST_ANALYSIS_PATH, data)
+
+
+def load_last_weekly_analysis():
+    """Weekly equivalent of load_last_analysis() - see that docstring."""
+    return _load_json_state(LAST_WEEKLY_ANALYSIS_PATH)
+
+
+def save_last_weekly_analysis(date_str, analysis_text, extra=None):
+    """Weekly equivalent of save_last_analysis() - see that docstring."""
+    data = {"date": date_str, "analysis": analysis_text}
+    if extra:
+        data.update(extra)
+    _save_json_state(LAST_WEEKLY_ANALYSIS_PATH, data)
 
 def load_calendar_watch_state():
     """Reads the set of event keys already alerted on by the calendar watcher,
@@ -341,7 +381,7 @@ def apply_extracted_actuals(events, extracted_actuals):
     return events
 
 
-def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None):
+def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None, warning_banner=None):
     order = ["changed", "yield", "direction", "opposite", "calendar", "mind"]
     body = extra_html_before
     quick_take = ""
@@ -385,6 +425,14 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
 
     nav_html = build_nav_pills(nav_links)
 
+    banner_html = ""
+    if warning_banner:
+        banner_html = (
+            '<div style="margin:16px 24px 0;padding:14px 16px;border-radius:8px;background:#fff3cd;'
+            'border:1px solid #ffe69c;color:#664d03;font-size:13px;line-height:1.5;">'
+            f'\u26A0\uFE0F {escape_html(warning_banner)}</div>'
+        )
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape_html(title)}</title></head>
@@ -396,6 +444,7 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
     <div style="color:#a9b4c4;font-size:12px;margin-top:6px;">{escape_html(subtitle)}</div>
   </div>
   {nav_html}
+  {banner_html}
   <div style="border:1px solid #eee;border-top:none;padding:22px 24px 20px;border-radius:0 0 12px 12px;">
     {quick_take}{body}
   </div>
