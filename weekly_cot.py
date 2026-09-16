@@ -12,7 +12,7 @@ import requests
 from lib import (
     CARRY_TRADE_FRAMEWORK,
     ANALYSIS_STYLE_GUIDE,
-    ask_gemini,
+    ask_llm,
     is_gemini_error,
     parse_sections,
     build_newsletter_html,
@@ -128,7 +128,7 @@ def main():
         "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary
     )
 
-    analysis_raw = ask_gemini(prompt)
+    analysis_raw = ask_llm(prompt)
     page_subtitle = f"COT data as of {latest['date']} \u00b7 generated {current_display_timestamp()}"
     warning_banner = None
 
@@ -149,11 +149,6 @@ def main():
             # the true last-fresh report, not this repeated fallback.
         else:
             print("No cached weekly report available to fall back to - skipping publish entirely this run.")
-            maybe_send_telegram(
-                "\u26A0\uFE0F <b>Weekly COT analysis failed to generate</b>\n"
-                f"AI analysis service was unavailable ({escape_html(analysis_raw[:200])}) and no cached "
-                "report exists to fall back to. No report was published this run."
-            )
             return
     else:
         analysis = analysis_raw
