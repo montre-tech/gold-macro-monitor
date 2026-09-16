@@ -15,7 +15,7 @@ import requests
 from lib import (
     CARRY_TRADE_FRAMEWORK,
     ANALYSIS_STYLE_GUIDE,
-    ask_gemini,
+    ask_llm,
     is_gemini_error,
     parse_sections,
     build_newsletter_html,
@@ -160,7 +160,7 @@ def main():
         "ignore those and focus on what is actually new or market-moving:" + news_block
     )
 
-    analysis_raw = ask_gemini(prompt)
+    analysis_raw = ask_llm(prompt)
     date_str = datetime.date.today().strftime("%b %d, %Y")
     page_timestamp = current_display_timestamp()
     warning_banner = None
@@ -190,11 +190,6 @@ def main():
             # further fallback) would lose track of what was actually last generated.
         else:
             print("No cached report available to fall back to - skipping publish entirely this run.")
-            maybe_send_telegram(
-                "\u26A0\uFE0F <b>Daily brief failed to generate</b>\n"
-                f"AI analysis service was unavailable ({escape_html(analysis_raw[:200])}) and no cached "
-                "report exists to fall back to. No report was published this run."
-            )
             return
     else:
         analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
