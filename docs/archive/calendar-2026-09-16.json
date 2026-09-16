@@ -44,8 +44,9 @@
       "impact": "High",
       "forecast": "4.00%",
       "previous": "3.75%",
-      "actual": null,
-      "status": "upcoming"
+      "actual": "4.00%",
+      "status": "released",
+      "actual_source": "news"
     },
     {
       "title": "FOMC Economic Projections",
@@ -56,7 +57,7 @@
       "forecast": "n/a",
       "previous": "n/a",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "FOMC Statement",
@@ -67,7 +68,7 @@
       "forecast": "n/a",
       "previous": "n/a",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "FOMC Press Conference",
