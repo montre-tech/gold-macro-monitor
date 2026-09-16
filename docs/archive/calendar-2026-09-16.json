@@ -20,8 +20,9 @@
       "impact": "Medium",
       "forecast": "0.6%",
       "previous": "-0.3%",
-      "actual": null,
-      "status": "upcoming"
+      "actual": "1.4%",
+      "status": "released",
+      "actual_source": "mql5"
     },
     {
       "title": "Retail Sales m/m",
@@ -31,8 +32,9 @@
       "impact": "Medium",
       "forecast": "0.8%",
       "previous": "-0.6%",
-      "actual": null,
-      "status": "upcoming"
+      "actual": "1.2%",
+      "status": "released",
+      "actual_source": "mql5"
     },
     {
       "title": "Federal Funds Rate",
