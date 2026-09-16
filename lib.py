@@ -24,12 +24,15 @@ CALENDAR_WATCH_STATE_PATH = os.path.join(STATE_DIR, "calendar_watch_state.json")
 # Prefixes ask_gemini() returns on failure (see that function) - checked against
 # the start of its return value to distinguish a genuine analysis from an error
 # string, so a failed call never gets treated as real content and published.
-GEMINI_ERROR_PREFIXES = ("[Gemini error:", "[Gemini request failed:", "[Could not parse Gemini response:")
+LLM_ERROR_PREFIXES = (
+    "[Gemini error:", "[Gemini request failed:", "[Could not parse Gemini response:",
+    "[Groq error:", "[Groq request failed:", "[Could not parse Groq response:",
+)
 
 
 def is_gemini_error(text):
-    """True if ask_gemini()'s return value is an error message, not real analysis."""
-    return isinstance(text, str) and text.strip().startswith(GEMINI_ERROR_PREFIXES)
+    """True if ask_gemini()/ask_groq()/ask_llm()'s return value is an error message, not real analysis."""
+    return isinstance(text, str) and text.strip().startswith(LLM_ERROR_PREFIXES)
 
 
 def _load_json_state(path):
@@ -277,6 +280,66 @@ def ask_gemini(prompt, max_retries=3):
     return last_error
 
 
+def ask_groq(prompt, max_retries=2):
+    """
+    Fallback LLM call via Groq's free, no-credit-card, OpenAI-compatible API -
+    tried only when Gemini fails. Free tier: 14,400 requests/day, 30/min, no
+    card needed - comfortably enough for occasional fallback use. Requires a
+    GROQ_API_KEY secret; returns an error string (never raises) if it's not
+    set or the call fails, matching ask_gemini()'s error-string convention so
+    callers can check with is_gemini_error() either way.
+    """
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return "[Groq error: GROQ_API_KEY not set]"
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]}
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        data = None
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            data = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            last_error = f"[Groq request failed: {e}]"
+
+        if data is not None:
+            if "error" not in data:
+                try:
+                    return data["choices"][0]["message"]["content"]
+                except (KeyError, IndexError):
+                    last_error = f"[Could not parse Groq response: {str(data)[:500]}]"
+            else:
+                last_error = f"[Groq error: {data['error'].get('message')}]"
+
+        if attempt < max_retries:
+            time.sleep(5)
+    return last_error
+
+
+def ask_llm(prompt):
+    """
+    Tries Gemini first, falling back to Groq - a different free provider,
+    likely to fail independently - if Gemini errors out (e.g. a daily quota
+    hit on one provider doesn't mean both are unavailable at once). Returns
+    the original Gemini error if both fail, so the caller's single
+    is_gemini_error() check still works either way, and the cache-fallback
+    logic downstream only kicks in once genuinely no fresh analysis was
+    possible from either provider.
+    """
+    result = ask_gemini(prompt)
+    if not is_gemini_error(result):
+        return result
+    print(f"Gemini failed ({result[:150]}) - trying Groq fallback...")
+    groq_result = ask_groq(prompt)
+    if not is_gemini_error(groq_result):
+        print("Groq fallback succeeded.")
+        return groq_result
+    print(f"Groq fallback also failed ({groq_result[:150]}).")
+    return result
+
+
 def parse_sections(text):
     matches = []
     for key, pattern in SECTION_HEADERS:
@@ -292,11 +355,18 @@ def parse_sections(text):
 
 
 def direction_color(text):
+    # "arrow" is a plain Unicode triangle character (not a colored emoji), so it
+    # renders in whatever CSS color the surrounding span sets - this matters
+    # because emoji like the "up/down-pointing triangle" pictographs are
+    # hard-coded RED in the Unicode spec regardless of direction, which is
+    # exactly why an earlier version never actually showed a green buy arrow.
+    # "telegram_icon" is a separate, genuinely green/red emoji for Telegram,
+    # which can't apply inline CSS color at all.
     if re.search(r"bearish", text, re.IGNORECASE):
-        return {"color": "#c0392b", "bg": "#fdecea", "label": "SELL", "arrow": "\U0001F53B"}
+        return {"color": "#c0392b", "bg": "#fdecea", "label": "SELL", "arrow": "\u25BC", "telegram_icon": "\U0001F4C9"}
     if re.search(r"bullish", text, re.IGNORECASE):
-        return {"color": "#1e8449", "bg": "#eafaf1", "label": "BUY", "arrow": "\U0001F53A"}
-    return {"color": "#b7791f", "bg": "#fef9e7", "label": "NEUTRAL / WAIT", "arrow": "\u27A1\uFE0F"}
+        return {"color": "#1e8449", "bg": "#eafaf1", "label": "BUY", "arrow": "\u25B2", "telegram_icon": "\U0001F4C8"}
+    return {"color": "#b7791f", "bg": "#fef9e7", "label": "NEUTRAL / WAIT", "arrow": "\u25B6", "telegram_icon": "\u27A1\uFE0F"}
 
 
 def text_to_html(text):
@@ -410,7 +480,7 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
                     f'<div style="margin:0 0 18px 0;border-radius:10px;background:{c["bg"]};'
                     f'border-left:5px solid {c["color"]};overflow:hidden;">'
                     f'<div style="padding:14px 18px 10px;">'
-                    f'<span style="font-size:26px;vertical-align:middle;margin-right:8px;">{c["arrow"]}</span>'
+                    f'<span style="font-size:26px;vertical-align:middle;margin-right:8px;color:{c["color"]};">{c["arrow"]}</span>'
                     f'<span style="font-size:17px;font-weight:800;letter-spacing:0.5px;vertical-align:middle;'
                     f'color:{c["color"]};">{c["label"]}</span></div>'
                     f'<div style="padding:0 18px 16px;font-size:14px;line-height:1.6;">{content_html}</div></div>'
@@ -654,18 +724,16 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     nearest zone's edge, and given the specific price (the "pivot") to watch
     for price to re-enter the zone - i.e. wait, don't force a trade out here.
 
-    STAGE 2 - if inside a green zone, find the nearest specific fib level
-    (50/61.8/78.6%) within that zone and apply the same 30-minute-candle
-    rejection-vs-breakout read as before:
-    - UPPER pin zone (yesterday's rejected rally / resistance wick): closing
-      BELOW the level = rejection (favors a SELL); closing ABOVE = break-through
-      (favors upside continuation).
-    - LOWER pin zone (yesterday's rejected sell-off / support wick): closing
-      ABOVE the level = bounce (favors a BUY); closing BELOW = break-through
-      (favors downside continuation).
-    On a confirmed BUY, suggests a stop-loss below the 30-minute candle's
-    low; on a confirmed SELL, above its high - using that candle's own
-    range as the invalidation point, not an arbitrary distance.
+    STAGE 2 - if inside a green zone, the trigger is a breakout relative to
+    the most recent closed 30-minute candle's OWN range (not the pin-bar
+    level itself, which only gates whether this area is worth watching at
+    all):
+    - Current price ABOVE that candle's high -> BUY confirmed (breakout).
+      Stop-loss suggested below that same candle's low.
+    - Current price BELOW that candle's low -> SELL confirmed (breakdown).
+      Stop-loss suggested above that same candle's high.
+    - Current price still inside that candle's range -> no breakout yet,
+      wait rather than assert a direction.
 
     Distances are reported in both dollars and "points" (point_size, default
     $0.01 - MT4's standard tick size for a 2-digit-quoted XAUUSD symbol; edit
@@ -718,45 +786,36 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
         f"{level_label} of the {zone_desc}, at ${level_price:,.2f} ({distance_points:,.0f} points away)."
     ]
 
-    close_price = recent_30m["close"] if recent_30m else None
-    close_time = recent_30m["time_label"] if recent_30m else None
-    candle_low = recent_30m["low"] if recent_30m else None
-    candle_high = recent_30m["high"] if recent_30m else None
-
-    if close_price is None:
+    if recent_30m is None:
         lines.append(
-            "30-minute candle data was unavailable this run, so rejection vs. break-through cannot "
-            "be confirmed - flag this as an unconfirmed setup rather than asserting a direction."
+            "30-minute candle data was unavailable this run, so no breakout trigger could be checked "
+            "- flag this as an unconfirmed setup rather than asserting a direction."
         )
         return "\n".join(lines)
 
-    if in_zone == "UPPER":
-        if close_price < level_price:
-            lines.append(
-                f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
-                f"BELOW this level - price is being rejected here. Favors a SELL / fade of the level."
-            )
-            if candle_high is not None:
-                lines.append(f"Suggested stop-loss: above the 30-minute candle's high, at ${candle_high:,.2f}.")
-        else:
-            lines.append(
-                f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
-                f"ABOVE this level - price is pushing through it. Favors continuation UPSIDE (breakout), "
-                f"not a sell."
-            )
+    candle_low = recent_30m["low"]
+    candle_high = recent_30m["high"]
+    candle_time = recent_30m["time_label"]
+    lines.append(
+        f"Reference 30-minute candle ({candle_time}): High ${candle_high:,.2f} / Low ${candle_low:,.2f}."
+    )
+
+    if current_price > candle_high:
+        lines.append(
+            f"Current price (${current_price:,.2f}) is ABOVE this candle's high - BUY confirmed (breakout)."
+        )
+        lines.append(f"Suggested stop-loss: below the 30-minute candle's low, at ${candle_low:,.2f}.")
+    elif current_price < candle_low:
+        lines.append(
+            f"Current price (${current_price:,.2f}) is BELOW this candle's low - SELL confirmed (breakdown)."
+        )
+        lines.append(f"Suggested stop-loss: above the 30-minute candle's high, at ${candle_high:,.2f}.")
     else:
-        if close_price > level_price:
-            lines.append(
-                f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
-                f"ABOVE this level - price is bouncing off it. Favors a BUY / bounce."
-            )
-            if candle_low is not None:
-                lines.append(f"Suggested stop-loss: below the 30-minute candle's low, at ${candle_low:,.2f}.")
-        else:
-            lines.append(
-                f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
-                f"BELOW this level - price is breaking through it. Favors continuation DOWNSIDE, not a buy."
-            )
+        lines.append(
+            f"Current price (${current_price:,.2f}) is still INSIDE this candle's range - no breakout "
+            f"confirmed yet. Wait for a clean move above ${candle_high:,.2f} (buy) or below "
+            f"${candle_low:,.2f} (sell) before entering; do not assert a direction yet."
+        )
 
     return "\n".join(lines)
 
@@ -1202,7 +1261,7 @@ def build_telegram_digest(title, subtitle, sections):
 
     if "direction" in sections:
         c = direction_color(sections["direction"])
-        lines.append(f"{c['arrow']} <b>Directional View \u2014 {c['label']}</b>")
+        lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {c['label']}</b>")
         lines.append(escape_html(sections["direction"]))
         lines.append("")
 
