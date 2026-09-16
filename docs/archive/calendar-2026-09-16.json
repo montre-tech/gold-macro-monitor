@@ -44,9 +44,8 @@
       "impact": "High",
       "forecast": "4.00%",
       "previous": "3.75%",
-      "actual": "4.00%",
-      "status": "released",
-      "actual_source": "news"
+      "actual": null,
+      "status": "released_no_actual"
     },
     {
       "title": "FOMC Economic Projections",
@@ -79,7 +78,7 @@
       "forecast": "n/a",
       "previous": "n/a",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     },
     {
       "title": "Philly Fed Manufacturing Index",
