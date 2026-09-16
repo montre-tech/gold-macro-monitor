@@ -293,10 +293,10 @@ def parse_sections(text):
 
 def direction_color(text):
     if re.search(r"bearish", text, re.IGNORECASE):
-        return {"color": "#c0392b", "bg": "#fdecea", "label": "BEARISH"}
+        return {"color": "#c0392b", "bg": "#fdecea", "label": "SELL", "arrow": "\U0001F53B"}
     if re.search(r"bullish", text, re.IGNORECASE):
-        return {"color": "#1e8449", "bg": "#eafaf1", "label": "BULLISH"}
-    return {"color": "#b7791f", "bg": "#fef9e7", "label": "NEUTRAL / MIXED"}
+        return {"color": "#1e8449", "bg": "#eafaf1", "label": "BUY", "arrow": "\U0001F53A"}
+    return {"color": "#b7791f", "bg": "#fef9e7", "label": "NEUTRAL / WAIT", "arrow": "\u27A1\uFE0F"}
 
 
 def text_to_html(text):
@@ -394,8 +394,8 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
             first_sentence = re.split(r"[.!?]", sections["direction"])[0].strip()
             quick_take = (
                 '<div style="text-align:center;margin:0 0 20px 0;">'
-                f'<span style="display:inline-block;padding:7px 18px;border-radius:20px;background:{c["color"]};'
-                f'color:#fff;font-size:12px;font-weight:bold;letter-spacing:0.8px;">\U0001F3AF {c["label"]}</span>'
+                f'<span style="display:inline-block;padding:10px 24px;border-radius:24px;background:{c["color"]};'
+                f'color:#fff;font-size:16px;font-weight:800;letter-spacing:1px;">{c["arrow"]} {c["label"]}</span>'
                 f'<div style="font-size:14px;color:#555;margin-top:10px;font-style:italic;max-width:480px;'
                 f'margin-left:auto;margin-right:auto;">{escape_html(first_sentence)}.</div></div>'
                 '<hr style="border:none;border-top:1px solid #eee;margin:0 0 18px 0;">'
@@ -407,11 +407,13 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
             if key == "direction":
                 c = direction_color(sections[key])
                 body += (
-                    f'<div style="margin:0 0 18px 0;padding:16px 18px;border-radius:10px;background:{c["bg"]};'
-                    f'border-left:5px solid {c["color"]};">'
-                    f'<div style="font-size:12px;font-weight:bold;letter-spacing:0.6px;color:{c["color"]};'
-                    f'margin-bottom:8px;text-transform:uppercase;">\U0001F3AF Directional View</div>'
-                    f'<div style="font-size:14px;line-height:1.6;">{content_html}</div></div>'
+                    f'<div style="margin:0 0 18px 0;border-radius:10px;background:{c["bg"]};'
+                    f'border-left:5px solid {c["color"]};overflow:hidden;">'
+                    f'<div style="padding:14px 18px 10px;">'
+                    f'<span style="font-size:26px;vertical-align:middle;margin-right:8px;">{c["arrow"]}</span>'
+                    f'<span style="font-size:17px;font-weight:800;letter-spacing:0.5px;vertical-align:middle;'
+                    f'color:{c["color"]};">{c["label"]}</span></div>'
+                    f'<div style="padding:0 18px 16px;font-size:14px;line-height:1.6;">{content_html}</div></div>'
                 )
             else:
                 meta = SECTION_META[key]
@@ -599,10 +601,12 @@ def format_price_context(pd_):
 
 def fetch_recent_30m_close():
     """
-    Fetches the most recently CLOSED 30-minute candle's close price for
-    XAU/USD via Twelve Data (index 1 of a descending-order series, since
-    index 0 may still be forming). Used to confirm or reject the pin-bar
-    setup below. Returns {"close": float, "time_label": str} or None.
+    Fetches the most recently CLOSED 30-minute candle for XAU/USD via Twelve
+    Data (index 1 of a descending-order series, since index 0 may still be
+    forming). Used to confirm or reject the pin-bar setup below, and to
+    anchor stop-loss placement (below the candle's low for a buy, above its
+    high for a sell). Returns {"close":, "low":, "high":, "time_label":} or
+    None.
 
     Requests an explicit UTC timezone from Twelve Data (rather than trusting
     whatever "exchange" default timezone it might otherwise use) and converts
@@ -625,6 +629,8 @@ def fetch_recent_30m_close():
         dt_display = dt_utc.astimezone(display_tz)
         return {
             "close": float(v["close"]),
+            "low": float(v["low"]),
+            "high": float(v["high"]),
             "time_label": dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
         }
     except (KeyError, TypeError, ValueError):
@@ -657,6 +663,9 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     - LOWER pin zone (yesterday's rejected sell-off / support wick): closing
       ABOVE the level = bounce (favors a BUY); closing BELOW = break-through
       (favors downside continuation).
+    On a confirmed BUY, suggests a stop-loss below the 30-minute candle's
+    low; on a confirmed SELL, above its high - using that candle's own
+    range as the invalidation point, not an arbitrary distance.
 
     Distances are reported in both dollars and "points" (point_size, default
     $0.01 - MT4's standard tick size for a 2-digit-quoted XAUUSD symbol; edit
@@ -711,6 +720,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
 
     close_price = recent_30m["close"] if recent_30m else None
     close_time = recent_30m["time_label"] if recent_30m else None
+    candle_low = recent_30m["low"] if recent_30m else None
+    candle_high = recent_30m["high"] if recent_30m else None
 
     if close_price is None:
         lines.append(
@@ -725,6 +736,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
                 f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
                 f"BELOW this level - price is being rejected here. Favors a SELL / fade of the level."
             )
+            if candle_high is not None:
+                lines.append(f"Suggested stop-loss: above the 30-minute candle's high, at ${candle_high:,.2f}.")
         else:
             lines.append(
                 f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
@@ -737,6 +750,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
                 f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
                 f"ABOVE this level - price is bouncing off it. Favors a BUY / bounce."
             )
+            if candle_low is not None:
+                lines.append(f"Suggested stop-loss: below the 30-minute candle's low, at ${candle_low:,.2f}.")
         else:
             lines.append(
                 f"The most recently closed 30-minute candle ({close_time}) closed at ${close_price:,.2f}, "
@@ -1187,7 +1202,7 @@ def build_telegram_digest(title, subtitle, sections):
 
     if "direction" in sections:
         c = direction_color(sections["direction"])
-        lines.append(f"\U0001F3AF <b>Directional View \u2014 {c['label']}</b>")
+        lines.append(f"{c['arrow']} <b>Directional View \u2014 {c['label']}</b>")
         lines.append(escape_html(sections["direction"]))
         lines.append("")
 
