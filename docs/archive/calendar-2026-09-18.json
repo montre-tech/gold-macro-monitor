@@ -106,7 +106,7 @@
       "title": "BOJ Policy Rate",
       "country": "JPY",
       "event_date": "2026-09-18",
-      "time_label": "Sep 18, 06:00 GMT+3",
+      "time_label": "Sep 18, 05:54 GMT+3",
       "impact": "High",
       "forecast": "<1.25%",
       "previous": "<1.00%",
@@ -117,7 +117,7 @@
       "title": "Monetary Policy Statement",
       "country": "JPY",
       "event_date": "2026-09-18",
-      "time_label": "Sep 18, 06:00 GMT+3",
+      "time_label": "Sep 18, 05:54 GMT+3",
       "impact": "High",
       "forecast": "n/a",
       "previous": "n/a",
@@ -128,12 +128,12 @@
       "title": "BOJ Press Conference",
       "country": "JPY",
       "event_date": "2026-09-18",
-      "time_label": "Sep 18, 08:30 GMT+3",
+      "time_label": "Sep 18, 09:30 GMT+3",
       "impact": "High",
       "forecast": "n/a",
       "previous": "n/a",
       "actual": null,
-      "status": "upcoming"
+      "status": "released_no_actual"
     }
   ]
 }
