@@ -221,6 +221,34 @@ ANALYSIS_STYLE_GUIDE = (
     "data capture only and will not be shown to the reader."
 )
 
+WEEKLY_ANALYSIS_STYLE_GUIDE = (
+    "Write like an experienced macro/futures analyst briefing a trader on the week's positioning "
+    "picture - not a news summary. Do not just restate the inputs back as a list. Structure your "
+    "response in six short sections with these exact headers:\n"
+    "1. WHAT CHANGED - the one or two things that actually matter from this week's COT report "
+    "and/or economic data, and why.\n"
+    "2. REAL YIELD / RATE LINKAGE - reason through how this week's data connects to US real yields "
+    "(nominal rates minus inflation expectations), since that is the dominant driver of gold.\n"
+    "3. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold heading "
+    "into next week, with a rough confidence level (low/medium/high) and the single biggest reason "
+    "for that lean, synthesizing the COT positioning read and this week's data releases together. "
+    "There is no pin-bar or intraday setup data for a weekly report - do not reference one.\n"
+    "4. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction (e.g. "
+    "if you lean bearish, give the honest bull case) and explain specifically why the current data "
+    "does not make that the higher-probability outcome right now.\n"
+    "5. ECONOMIC CALENDAR & POSITIONING - using the WEEKLY ECONOMIC CALENDAR DATA given below, "
+    "summarize the highest-impact USD/JPY releases from the PAST week (not today specifically - "
+    "this report looks back over the whole week), state whether each beat, met, or missed forecast, "
+    "and what that implies for rate-hike odds, the dollar, real yields, and gold - don't just "
+    "restate the numbers, interpret them. If the calendar data says unavailable or empty, say so "
+    "explicitly rather than inventing a release.\n"
+    "6. WHAT WOULD CHANGE MY MIND - the specific data point, COT shift, or event next week that "
+    "would actually flip the view.\n"
+    "Keep the whole thing under 500 words. Be decisive but honest about uncertainty - do not hedge "
+    "every sentence, but do not overstate confidence either. This is analysis to inform a decision, "
+    "not investment advice, and you can note that briefly at the end."
+)
+
 SECTION_HEADERS = [
     ("changed", r"\**\s*1\.\s*WHAT CHANGED\s*\**:?"),
     ("yield", r"\**\s*2\.\s*REAL YIELD.*?LINKAGE\s*\**:?"),
@@ -735,6 +763,11 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     - Current price still inside that candle's range -> no breakout yet,
       wait rather than assert a direction.
 
+    Every return path also reports the SECOND (opposite) pin zone's 50%
+    pivot and its distance from current price, so the trader can prepare
+    for price reaching that side too, not just whichever zone is currently
+    most relevant.
+
     Distances are reported in both dollars and "points" (point_size, default
     $0.01 - MT4's standard tick size for a 2-digit-quoted XAUUSD symbol; edit
     the point_size default here if your broker quotes gold with different
@@ -744,6 +777,23 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     upper_vals = dict(pd_["upper_pin_fib"])
     lower_vals = dict(pd_["lower_pin_fib"])
     radius = GREEN_ZONE_RADIUS_POINTS * point_size
+    zone_mids = {"UPPER": upper_vals["50%"], "LOWER": lower_vals["50%"]}
+
+    def describe_other_zone(primary_zone_name):
+        """Describes the OPPOSITE pin zone's 50% pivot, so the trader can see both
+        potential areas at once and prepare for price reaching the other side,
+        not just whichever zone happens to be closest right now."""
+        other_name = "LOWER" if primary_zone_name == "UPPER" else "UPPER"
+        other_mid = zone_mids[other_name]
+        distance_points = abs(current_price - other_mid) / point_size
+        move_word = "rally" if other_mid > current_price else "fall" if other_mid < current_price else "reach"
+        other_desc = "UPPER pin zone (resistance / rejected-rally wick)" if other_name == "UPPER" \
+            else "LOWER pin zone (support / rejected-selloff wick)"
+        return (
+            f"SECOND PIVOT TO WATCH - the {other_desc}'s 50% level sits at ${other_mid:,.2f}; price "
+            f"would need to {move_word} roughly {distance_points:,.0f} points to reach it. Keep this "
+            f"on your radar in case today's move extends that far."
+        )
 
     zones = [
         ("UPPER", upper_vals["50%"], upper_vals["50%"] - radius, upper_vals["50%"] + radius),
@@ -768,7 +818,7 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
             f"({distance_points:,.0f} points) away from the nearest edge of that zone. "
             f"Advise the trader to WAIT rather than force an entry here. The pivot level to watch "
             f"is ${pivot_price:,.2f} - once price reaches that level (entering the green zone), "
-            f"it becomes a valid entry consideration area again."
+            f"it becomes a valid entry consideration area again.\n\n" + describe_other_zone(zone_name)
         )
 
     zone_fib = pd_["upper_pin_fib"] if in_zone == "UPPER" else pd_["lower_pin_fib"]
@@ -791,6 +841,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
             "30-minute candle data was unavailable this run, so no breakout trigger could be checked "
             "- flag this as an unconfirmed setup rather than asserting a direction."
         )
+        lines.append("")
+        lines.append(describe_other_zone(in_zone))
         return "\n".join(lines)
 
     candle_low = recent_30m["low"]
@@ -817,6 +869,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
             f"${candle_low:,.2f} (sell) before entering; do not assert a direction yet."
         )
 
+    lines.append("")
+    lines.append(describe_other_zone(in_zone))
     return "\n".join(lines)
 
 
@@ -1076,18 +1130,11 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Actual: {e['actual']}{source_note} | Forecast: {e['forecast']} | Previous: {e['previous']}"
             )
-    if released_no_actual:
-        lines.append("")
-        lines.append(
-            f"ALREADY RELEASED {day_word} (scheduled time has passed, but this feed hasn't posted "
-            "the actual figure yet - check the TARGETED HEADLINE SEARCH block below for the real "
-            "number if possible, and treat this as having happened, not as still upcoming):"
-        )
-        for e in released_no_actual:
-            lines.append(
-                f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
-                f"Forecast: {e['forecast']} | Previous: {e['previous']} | Actual: not reported by this feed"
-            )
+    # Events still stuck at released_no_actual after MQL5 + targeted-news backfill
+    # (see fetch_targeted_headlines_for_missing_actuals in daily_brief.py, which runs
+    # BEFORE this function and is what promotes most of them into the "released"
+    # bucket above) are intentionally not shown here - the reader asked for the
+    # confirmed-actuals section only, not a running list of unresolved placeholders.
     if upcoming and not is_fallback:  # a fallback day is entirely in the past - nothing "upcoming" about it
         lines.append("")
         lines.append("NOT YET RELEASED TODAY:")
@@ -1096,6 +1143,36 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
                 f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
                 f"Forecast: {e['forecast']} | Previous: {e['previous']}"
             )
+    return "\n".join(lines)
+
+
+def format_weekly_calendar_summary(raw_events):
+    """
+    Summarizes a week's worth of already-fetched Medium/High-impact USD/JPY
+    calendar events (with any MQL5 backfill already applied) for the weekly
+    COT report - a flat past-week recap sorted chronologically, not the
+    today/upcoming split the daily report uses, since by the time the weekly
+    report runs (Saturday) the whole week's data has already occurred.
+    Confirmed-actual events only, consistent with the daily report no longer
+    showing unconfirmed "no actual" placeholders either.
+    """
+    if raw_events is None:
+        return "Weekly economic calendar data unavailable this run - do not invent any releases."
+    confirmed = [e for e in raw_events if e["status"] == "released"]
+    if not confirmed:
+        return "No confirmed Medium/High-impact USD or JPY releases found for this week."
+
+    lines = [f"(All times in {DISPLAY_TZ_LABEL}. Confirmed releases only, sorted by date/time.)"]
+    for e in sorted(confirmed, key=lambda x: (x["event_date"], x["time_label"])):
+        source_note = ""
+        if e.get("actual_source") == "mql5":
+            source_note = " (via MQL5 calendar, not the FF feed)"
+        elif e.get("actual_source") == "news":
+            source_note = " (via news, not the official feed)"
+        lines.append(
+            f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
+            f"Actual: {e['actual']}{source_note} | Forecast: {e['forecast']} | Previous: {e['previous']}"
+        )
     return "\n".join(lines)
 
 
