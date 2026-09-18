@@ -11,7 +11,7 @@ import requests
 
 from lib import (
     CARRY_TRADE_FRAMEWORK,
-    ANALYSIS_STYLE_GUIDE,
+    WEEKLY_ANALYSIS_STYLE_GUIDE,
     ask_llm,
     is_gemini_error,
     parse_sections,
@@ -20,6 +20,10 @@ from lib import (
     maybe_send_telegram,
     escape_html,
     maybe_send_email,
+    fetch_raw_calendar_events,
+    fetch_mql5_calendar_actuals,
+    apply_mql5_actuals,
+    format_weekly_calendar_summary,
     load_last_weekly_analysis,
     save_last_weekly_analysis,
     rebuild_archive_index,
@@ -121,11 +125,18 @@ def main():
         f"directional conviction or just position-trimming):\n- {nc_asym}\n- {comm_asym}"
     )
 
+    weekly_calendar_events = fetch_raw_calendar_events()
+    mql5_actuals = fetch_mql5_calendar_actuals()
+    weekly_calendar_events = apply_mql5_actuals(weekly_calendar_events, mql5_actuals)
+    weekly_calendar_block = format_weekly_calendar_summary(weekly_calendar_events)
+
     prompt = (
-        CARRY_TRADE_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
+        CARRY_TRADE_FRAMEWORK + "\n\n" + WEEKLY_ANALYSIS_STYLE_GUIDE +
         "\n\nHere is the CFTC Commitments of Traders trend data for COMEX Gold you need to "
         "analyze. Pay close attention to the precomputed asymmetry note - it tells you whether a "
-        "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary
+        "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary +
+        "\n\nWEEKLY ECONOMIC CALENDAR DATA (see instructions in ECONOMIC CALENDAR & POSITIONING "
+        "above for how to use this):\n" + weekly_calendar_block
     )
 
     analysis_raw = ask_llm(prompt)
@@ -139,6 +150,7 @@ def main():
             analysis = cached["analysis"]
             sections = parse_sections(analysis)
             data_summary = cached.get("data_summary", data_summary)
+            weekly_calendar_block = cached.get("weekly_calendar_block", weekly_calendar_block)
             cached_label = cached.get("page_subtitle") or cached.get("date", "an earlier run")
             warning_banner = (
                 f"AI analysis service was unavailable this run ({analysis_raw[:120]}). Showing the "
@@ -156,12 +168,16 @@ def main():
         save_last_weekly_analysis(latest["date"], analysis, extra={
             "page_subtitle": page_subtitle,
             "data_summary": data_summary,
+            "weekly_calendar_block": weekly_calendar_block,
         })
 
     data_box_html = (
         '<div style="font-family:monospace;font-size:12px;color:#444;background:#f4f4f4;'
-        'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
+        'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:8px;">'
         + escape_html(data_summary) + "</div>"
+        '<div style="font-family:monospace;font-size:12px;color:#444;background:#fff8e1;'
+        'padding:12px 14px;border-radius:6px;white-space:pre-wrap;margin-bottom:14px;">'
+        + escape_html(weekly_calendar_block) + "</div>"
     )
     html_out = build_newsletter_html(
         "Weekly Gold COT Analysis", page_subtitle, sections, analysis, data_box_html,
