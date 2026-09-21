@@ -7,10 +7,6 @@ sends a Telegram digest if TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID secrets are set.
 """
 import datetime
 import os
-import urllib.parse
-import xml.etree.ElementTree as ET
-
-import requests
 
 from lib import (
     CARRY_TRADE_FRAMEWORK,
@@ -22,8 +18,10 @@ from lib import (
     build_telegram_digest,
     maybe_send_telegram,
     maybe_send_email,
+    fetch_news,
     fetch_gold_price_data,
     format_price_context,
+    save_yesterday_pin_zones,
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
     fetch_raw_calendar_events,
@@ -47,15 +45,6 @@ NEWS_QUERIES = [
     "gold price real yields",
     "CME FedWatch rate hike odds",
 ]
-
-
-def fetch_news(query, max_items=6):
-    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query) + "&hl=en-US&gl=US&ceid=US:en"
-    resp = requests.get(url, timeout=20)
-    root = ET.fromstring(resp.content)
-    items = root.findall("./channel/item")[:max_items]
-    lines = [f"- {item.findtext('title')} ({item.findtext('pubDate')})" for item in items]
-    return "\n".join(lines)
 
 
 COUNTRY_SEARCH_NAMES = {"USD": "US", "JPY": "Japan"}
@@ -112,6 +101,7 @@ def main():
         price_block = format_price_context(price_data)
         recent_30m = fetch_recent_30m_close()
         setup_note = build_pin_bar_setup_note(price_data, recent_30m)
+        save_yesterday_pin_zones(price_data)
     else:
         price_block = "Price data unavailable this run - do not state any specific price or price range."
         setup_note = "Setup check unavailable - price data was missing this run."
