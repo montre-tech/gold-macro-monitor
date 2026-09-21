@@ -40,6 +40,8 @@ WEEKLY_TREND_QUERIES = [
     "US inflation trend forecast months",
     "gold price outlook analysts next week",
     "Bank of Japan policy trend yen",
+    "oil price trend inflation outlook",
+    "geopolitical risk gold demand trend",
 ]
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
