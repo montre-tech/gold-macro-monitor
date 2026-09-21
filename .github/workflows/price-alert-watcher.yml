@@ -1,0 +1,43 @@
+name: Price Breakout Watcher
+
+on:
+  schedule:
+    # Every 5 minutes, all day - gold trades nearly 24/5, and 5-minute polling is
+    # the minimum interval that fits Twelve Data's 800-call/day free quota for this
+    # check (2 calls per check x 288 checks/day = 576/day, leaving headroom for the
+    # daily/weekly scripts' own usage). 1-minute polling was considered but would
+    # need ~2,880 calls/day - well over the free quota - so 5-minute is the floor.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - run: python price_alert_watcher.py
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save watcher state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state
+          if ! git diff --staged --quiet; then
+            git commit -m "Price alert watcher: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git pull --rebase origin main
+            git push
+          fi
