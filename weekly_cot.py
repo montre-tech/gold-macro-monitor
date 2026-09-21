@@ -20,6 +20,7 @@ from lib import (
     maybe_send_telegram,
     escape_html,
     maybe_send_email,
+    fetch_news,
     fetch_raw_calendar_events,
     fetch_mql5_calendar_actuals,
     apply_mql5_actuals,
@@ -29,6 +30,17 @@ from lib import (
     rebuild_archive_index,
     current_display_timestamp,
 )
+
+# Trend-oriented queries (not single-event queries like the daily report uses) -
+# looking for multi-week narrative context (has inflation been trending up for
+# months? has Fed tone been building hawkish since some date?) that a single
+# week's isolated data points can't provide on their own.
+WEEKLY_TREND_QUERIES = [
+    "Federal Reserve interest rate trend outlook",
+    "US inflation trend forecast months",
+    "gold price outlook analysts next week",
+    "Bank of Japan policy trend yen",
+]
 
 COT_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 
@@ -130,13 +142,24 @@ def main():
     weekly_calendar_events = apply_mql5_actuals(weekly_calendar_events, mql5_actuals)
     weekly_calendar_block = format_weekly_calendar_summary(weekly_calendar_events)
 
+    trend_news_block = ""
+    for q in WEEKLY_TREND_QUERIES:
+        trend_news_block += f'\n\nSearch: "{q}"\n{fetch_news(q, max_items=5)}'
+
     prompt = (
         CARRY_TRADE_FRAMEWORK + "\n\n" + WEEKLY_ANALYSIS_STYLE_GUIDE +
         "\n\nHere is the CFTC Commitments of Traders trend data for COMEX Gold you need to "
         "analyze. Pay close attention to the precomputed asymmetry note - it tells you whether a "
         "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary +
-        "\n\nWEEKLY ECONOMIC CALENDAR DATA (see instructions in ECONOMIC CALENDAR & POSITIONING "
-        "above for how to use this):\n" + weekly_calendar_block
+        "\n\nWEEKLY ECONOMIC CALENDAR DATA (confirmed releases from this specific week - see "
+        "instructions in ECONOMIC CALENDAR & POSITIONING above for how to use this):\n" +
+        weekly_calendar_block +
+        "\n\nTREND-FINDING NEWS SEARCH (use this to establish the MULTI-WEEK narrative behind this "
+        "week's isolated data points - e.g. has inflation been trending in one direction for several "
+        "months, has Fed/BOJ tone been building in a direction, what are analysts saying about the "
+        "trajectory rather than just this week's print - and explicitly tie that trend into how it "
+        "likely affects the COT positioning read above, not as a separate disconnected topic):" +
+        trend_news_block
     )
 
     analysis_raw = ask_llm(prompt)
