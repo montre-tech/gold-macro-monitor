@@ -44,6 +44,8 @@ NEWS_QUERIES = [
     "Bank of Japan yen intervention",
     "gold price real yields",
     "CME FedWatch rate hike odds",
+    "oil price WTI Brent inflation",
+    "geopolitical tensions gold safe haven",
 ]
 
 
