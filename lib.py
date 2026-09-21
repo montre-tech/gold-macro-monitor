@@ -9,6 +9,8 @@ import os
 import re
 import smtplib
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -16,10 +18,23 @@ import requests
 
 FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
+
+def fetch_news(query, max_items=6):
+    """Google News RSS search - free, no key needed. Shared by both the daily
+    (macro headlines) and weekly (trend-finding) reports."""
+    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query) + "&hl=en-US&gl=US&ceid=US:en"
+    resp = requests.get(url, timeout=20)
+    root = ET.fromstring(resp.content)
+    items = root.findall("./channel/item")[:max_items]
+    lines = [f"- {item.findtext('title')} ({item.findtext('pubDate')})" for item in items]
+    return "\n".join(lines)
+
 STATE_DIR = "state"
 LAST_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_daily_analysis.json")
 LAST_WEEKLY_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_weekly_analysis.json")
 CALENDAR_WATCH_STATE_PATH = os.path.join(STATE_DIR, "calendar_watch_state.json")
+YESTERDAY_PIN_ZONES_PATH = os.path.join(STATE_DIR, "yesterday_pin_zones.json")
+PRICE_ALERT_STATE_PATH = os.path.join(STATE_DIR, "price_alert_state.json")
 
 # Prefixes ask_gemini() returns on failure (see that function) - checked against
 # the start of its return value to distinguish a genuine analysis from an error
@@ -111,6 +126,41 @@ def save_calendar_watch_state(alerted_keys):
             json.dump(sorted(alerted_keys), f)
     except OSError as e:
         print(f"Could not save calendar watch state: {e}")
+
+
+def save_yesterday_pin_zones(pd_):
+    """
+    Caches yesterday's daily OHLC (used to define the full 0%-100% wick range
+    of both pin zones) once per day, written by daily_brief.py right after it
+    computes this anyway. This lets the frequent price-alert watcher check
+    "is price inside a pin zone" on every 5-minute poll WITHOUT its own daily
+    time-series API call each time - that data doesn't change intraday, so
+    fetching it 288 times a day would be pure waste against Twelve Data's
+    800-call/day free quota.
+    """
+    _save_json_state(YESTERDAY_PIN_ZONES_PATH, {
+        "yesterday_date": pd_["yesterday_date"],
+        "open": pd_["open"], "high": pd_["high"], "low": pd_["low"], "close": pd_["close"],
+        "body_top": pd_["body_top"], "body_bottom": pd_["body_bottom"],
+    })
+
+
+def load_yesterday_pin_zones():
+    """Reads the cached pin-zone range saved by save_yesterday_pin_zones(), or
+    None if not yet available (e.g. the daily brief hasn't run yet today)."""
+    return _load_json_state(YESTERDAY_PIN_ZONES_PATH)
+
+
+def load_price_alert_state():
+    """Reads the price-alert watcher's dedup state: which direction was last
+    alerted on, and for which reference 30-minute candle, so a breakout that
+    persists across multiple 5-minute checks only alerts once."""
+    return _load_json_state(PRICE_ALERT_STATE_PATH) or {}
+
+
+def save_price_alert_state(state):
+    """Persists the price-alert watcher's dedup state."""
+    _save_json_state(PRICE_ALERT_STATE_PATH, state)
 
 
 def build_quick_calendar_alert(event):
@@ -240,8 +290,15 @@ WEEKLY_ANALYSIS_STYLE_GUIDE = (
     "summarize the highest-impact USD/JPY releases from the PAST week (not today specifically - "
     "this report looks back over the whole week), state whether each beat, met, or missed forecast, "
     "and what that implies for rate-hike odds, the dollar, real yields, and gold - don't just "
-    "restate the numbers, interpret them. If the calendar data says unavailable or empty, say so "
-    "explicitly rather than inventing a release.\n"
+    "restate the numbers, interpret them. Then use the TREND-FINDING NEWS SEARCH block to place "
+    "this week's numbers into a MULTI-WEEK narrative - is this week's data a continuation of a "
+    "trend that has been building for months, an acceleration, or a break from it - and explain "
+    "specifically how that trend context should shape how the COT positioning read in section 1 "
+    "gets interpreted (e.g. a hawkish trend that's been building for months makes fresh long "
+    "liquidation look more like the start of a real shift than a one-week blip, or vice versa). "
+    "Treat the calendar data and the trend search as one connected argument, not two separate "
+    "topics. If either input says unavailable or empty, say so explicitly rather than inventing "
+    "a release or a trend.\n"
     "6. WHAT WOULD CHANGE MY MIND - the specific data point, COT shift, or event next week that "
     "would actually flip the view.\n"
     "Keep the whole thing under 500 words. Be decisive but honest about uncertainty - do not hedge "
@@ -735,7 +792,105 @@ def fetch_recent_30m_close():
         return None
 
 
-GREEN_ZONE_RADIUS_POINTS = 1000  # +/- radius around each zone's 50% level; edit this one number to tune it
+def fetch_latest_5m_open():
+    """
+    Fetches the most recently formed 5-minute candle's OPEN price for
+    XAU/USD, used by the price-alert watcher to check "did a new low-
+    timeframe candle just open beyond the previous 30-minute candle's
+    range". Uses index 0 (the newest bar) deliberately, unlike
+    fetch_recent_30m_close's index 1 - we want the open of whatever candle
+    JUST started, not the previous complete one.
+
+    Returns {"open":, "time_label":} or None.
+    """
+    series = _twelvedata_request("time_series", {
+        "symbol": "XAU/USD", "interval": "5min", "outputsize": 2, "order": "DESC",
+        "timezone": "UTC",
+    })
+    if not series or "values" not in series or len(series["values"]) < 1:
+        return None
+    try:
+        v = series["values"][0]
+        dt_utc = datetime.datetime.strptime(v["datetime"], "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc
+        )
+        display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
+        dt_display = dt_utc.astimezone(display_tz)
+        return {
+            "open": float(v["open"]),
+            "time_label": dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def check_price_breakout_alert():
+    """
+    The price-alert watcher's core check, run every 5 minutes by
+    calendar-watcher-style scheduling:
+
+    1. GATE: is the latest 5-minute candle's open price inside EITHER pin
+       zone's FULL wick range (0%-100%, not just the narrow green zone) -
+       using yesterday's cached OHLC (see save_yesterday_pin_zones), no
+       fresh daily-series API call needed for this part.
+    2. TRIGGER: does that same open price break above the previous 30-minute
+       candle's high, or below its low.
+    3. DEDUP: only returns an alert once per (direction, reference 30-minute
+       candle) combination - a breakout that persists across several 5-minute
+       checks doesn't re-fire every time.
+
+    Returns an alert message string if a NEW breakout is detected, or None
+    (either nothing happened, or it already fired for this exact breakout).
+    """
+    cached_zones = load_yesterday_pin_zones()
+    if not cached_zones:
+        print("No cached pin-zone data yet (daily brief hasn't run today) - skipping check.")
+        return None
+
+    candle_5m = fetch_latest_5m_open()
+    candle_30m = fetch_recent_30m_close()
+    if not candle_5m or not candle_30m:
+        print("Price data unavailable this check (5m or 30m fetch failed) - skipping.")
+        return None
+
+    open_price = candle_5m["open"]
+    body_top, body_bottom = cached_zones["body_top"], cached_zones["body_bottom"]
+    day_high, day_low = cached_zones["high"], cached_zones["low"]
+
+    in_upper_wick = body_top <= open_price <= day_high
+    in_lower_wick = day_low <= open_price <= body_bottom
+    if not (in_upper_wick or in_lower_wick):
+        return None  # outside both full pin-bar wick ranges - not gated, no alert
+
+    prev_high, prev_low = candle_30m["high"], candle_30m["low"]
+    direction = None
+    if open_price > prev_high:
+        direction = "BUY"
+    elif open_price < prev_low:
+        direction = "SELL"
+    if direction is None:
+        return None  # inside the previous 30-min range - no breakout
+
+    # Dedup: one alert per (direction, reference 30-min candle) combination.
+    state = load_price_alert_state()
+    dedup_key = f'{candle_30m["time_label"]}:{direction}'
+    if state.get("last_key") == dedup_key:
+        return None
+    save_price_alert_state({"last_key": dedup_key})
+
+    zone_name = "UPPER" if in_upper_wick else "LOWER"
+    sl_price = prev_low if direction == "BUY" else prev_high
+    sl_desc = "below" if direction == "BUY" else "above"
+    arrow = "\U0001F4C8" if direction == "BUY" else "\U0001F4C9"
+
+    return (
+        f"{arrow} <b>Price Breakout Alert \u2014 {direction}</b>\n"
+        f"A 5-minute candle opened at ${open_price:,.2f} ({candle_5m['time_label']}), breaking "
+        f"{'above' if direction == 'BUY' else 'below'} the previous 30-minute candle's "
+        f"{'high' if direction == 'BUY' else 'low'} (${prev_high if direction == 'BUY' else prev_low:,.2f}, "
+        f"{candle_30m['time_label']}), while inside yesterday's {zone_name} pin bar range.\n"
+        f"Suggested stop-loss: {sl_desc} ${sl_price:,.2f}."
+    )
 
 
 def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
