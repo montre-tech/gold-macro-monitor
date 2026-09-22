@@ -912,6 +912,9 @@ def check_price_breakout_alert():
     )
 
 
+GREEN_ZONE_RADIUS_POINTS = 1000  # +/- radius around each zone's 50% level; edit this one number to tune it
+
+
 def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     """
     Two-stage check, both precomputed here rather than left to the model
@@ -1276,7 +1279,6 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
         return f"No Medium/High-impact USD or JPY events scheduled for today ({DISPLAY_TZ_LABEL})."
 
     released = [e for e in events if e["status"] == "released"]
-    released_no_actual = [e for e in events if e["status"] == "released_no_actual"]
     upcoming = [e for e in events if e["status"] == "upcoming"]
 
     if is_fallback:
