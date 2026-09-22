@@ -1,0 +1,38 @@
+{
+  "date": "Sep 22, 2026",
+  "events": [
+    {
+      "title": "Unemployment Claims",
+      "country": "USD",
+      "event_date": "2026-09-24",
+      "time_label": "Sep 24, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "201K",
+      "previous": "196K",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Revised UoM Consumer Sentiment",
+      "country": "USD",
+      "event_date": "2026-09-25",
+      "time_label": "Sep 25, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "47.4",
+      "previous": "47.8",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
+      "title": "Revised UoM Inflation Expectations",
+      "country": "USD",
+      "event_date": "2026-09-25",
+      "time_label": "Sep 25, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "4.6%",
+      "actual": null,
+      "status": "upcoming"
+    }
+  ]
+}
