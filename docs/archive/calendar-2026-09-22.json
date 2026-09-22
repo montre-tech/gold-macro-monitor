@@ -2,6 +2,17 @@
   "date": "Sep 22, 2026",
   "events": [
     {
+      "title": "President Trump Speaks",
+      "country": "USD",
+      "event_date": "2026-09-22",
+      "time_label": "Sep 22, 16:55 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "upcoming"
+    },
+    {
       "title": "Unemployment Claims",
       "country": "USD",
       "event_date": "2026-09-24",
