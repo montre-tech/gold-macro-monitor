@@ -135,8 +135,9 @@ def save_yesterday_pin_zones(pd_):
     computes this anyway. This lets the frequent price-alert watcher check
     "is price inside a pin zone" on every 5-minute poll WITHOUT its own daily
     time-series API call each time - that data doesn't change intraday, so
-    fetching it 288 times a day would be pure waste against Twelve Data's
-    800-call/day free quota.
+    fetching it 288 times a day would be pure waste (biquote.io's free tier
+    is generous, but there's no reason to hammer it for data that's already
+    sitting in state from this morning's daily brief run).
     """
     _save_json_state(YESTERDAY_PIN_ZONES_PATH, {
         "yesterday_date": pd_["yesterday_date"],
@@ -631,72 +632,100 @@ def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_be
 </body></html>"""
 
 
-def _twelvedata_request(endpoint, params):
-    """
-    Calls the Twelve Data API - a proper, documented, key-based market data
-    provider (not a scraped or unofficial endpoint). Free tier: 800 calls/day,
-    8/min, no credit card required. Get a key at https://twelvedata.com/register
-    and set it as the TWELVEDATA_API_KEY secret.
+GOLD_SYMBOL = "XAUUSD"  # biquote.io's no-slash forex-convention ticker for spot gold
 
-    This replaced Yahoo's GC=F futures symbol, which turned out to be
-    unreliable for this purpose: GC=F tracks whichever COMEX contract month
-    happens to be "front month" at query time, and different contract months
-    can trade hundreds of dollars apart due to the futures curve (contango) -
-    causing exactly the "$4,462 instead of $4,417" kind of error this switch
-    fixes. XAU/USD here is a proper spot-style forex-convention symbol.
+
+def _biquote_request(path, params=None):
     """
-    api_key = os.environ.get("TWELVEDATA_API_KEY")
-    if not api_key:
-        print("TWELVEDATA_API_KEY is not set - price data will be unavailable.")
-        return None
-    url = f"https://api.twelvedata.com/{endpoint}"
-    params = dict(params)
-    params["apikey"] = api_key
+    Calls the free biquote.io market-data API - a proper, documented REST
+    provider, no API key, no signup, 15,000 requests/min per IP. Replaced
+    Twelve Data (which needed a key and a much tighter 800-call/day free
+    quota) as the source for gold's current price, previous-day OHLC, and
+    the 30-minute/5-minute candles the price watcher needs.
+
+    `path` is the full path under the biquote host, e.g. "/api/XAUUSD" or
+    "/api/XAUUSD/ohlc". Returns the parsed JSON body, or None on any
+    request/parse/HTTP-error failure (biquote returns error details as JSON
+    even on 4xx/5xx, so we still try to log data.get("message") when we can).
+    """
+    url = f"https://biquote.io{path}"
     try:
-        resp = requests.get(url, params=params, timeout=20)
-        data = resp.json()
-    except (requests.RequestException, ValueError) as e:
-        print(f"Twelve Data request to {endpoint} failed: {e}")
+        resp = requests.get(url, params=params or {}, timeout=20)
+    except requests.RequestException as e:
+        print(f"biquote request to {path} failed: {e}")
         return None
-    if isinstance(data, dict) and data.get("status") == "error":
-        print(f"Twelve Data API error on {endpoint}: {data.get('message')}")
+    try:
+        data = resp.json()
+    except ValueError as e:
+        print(f"biquote request to {path} returned unparseable JSON: {e}")
+        return None
+    if resp.status_code >= 400:
+        msg = data.get("message") or data.get("error") if isinstance(data, dict) else str(data)[:200]
+        print(f"biquote API error on {path} ({resp.status_code}): {msg}")
         return None
     return data
 
 
+def _biquote_ohlc(symbol, interval, limit):
+    """
+    Fetches OHLC bars for `symbol` at `interval` (biquote's own timeframe
+    strings: "1m","5m","15m","30m","1h","4h","1d") via biquote's /ohlc
+    endpoint, newest-first. Returns the raw "bars" list (each bar carries an
+    explicit isOpen flag - see _latest_closed_bar), or None on failure.
+    """
+    data = _biquote_request(f"/api/{symbol}/ohlc", {"interval": interval, "limit": limit})
+    if not data or "bars" not in data:
+        return None
+    return data["bars"]
+
+
+def _latest_closed_bar(bars):
+    """
+    biquote's OHLC bars come back newest-first with the still-forming bar
+    explicitly marked isOpen: true - so unlike Twelve Data (where "the
+    forming bar is index 0" was an assumption we once got burned by), here
+    we can just skip forward past any bar biquote itself says is still
+    open, rather than trusting a fixed array position. Returns the first
+    closed bar, or None if bars is empty/every bar is somehow open.
+    """
+    for b in bars:
+        if not b.get("isOpen"):
+            return b
+    return None
+
+
 def fetch_gold_price_data():
     """
-    Fetches current gold spot price and yesterday's completed daily OHLC from
-    Twelve Data's XAU/USD symbol, then computes Fibonacci levels the way the
-    MT4 EA's Pin Zone logic does (FIB_PIN_BOTH): two separate sets across each
-    wick - UPPER (candle body top -> day's high) and LOWER (candle body
-    bottom -> day's low). This mirrors Fib_DrawPinZones() in the EA, applied
-    to the most recent completed daily candle ("yesterday's pin bar").
+    Fetches current gold spot price and yesterday's completed daily OHLC
+    from biquote.io's XAUUSD symbol, then computes Fibonacci levels the way
+    the MT4 EA's Pin Zone logic does (FIB_PIN_BOTH): two separate sets
+    across each wick - UPPER (candle body top -> day's high) and LOWER
+    (candle body bottom -> day's low). This mirrors Fib_DrawPinZones() in
+    the EA, applied to the most recent completed daily candle ("yesterday's
+    pin bar").
 
-    Returns a dict of structured values, or None if the fetch/parse fails or
-    TWELVEDATA_API_KEY isn't set.
+    Returns a dict of structured values, or None if the fetch/parse fails.
     """
-    price_resp = _twelvedata_request("price", {"symbol": "XAU/USD"})
-    if not price_resp or "price" not in price_resp:
+    tick = _biquote_request(f"/api/{GOLD_SYMBOL}")
+    if not tick or "mid" not in tick:
         return None
     try:
-        current_price = float(price_resp["price"])
+        current_price = float(tick["mid"])
     except (TypeError, ValueError):
         return None
 
-    series = _twelvedata_request("time_series", {
-        "symbol": "XAU/USD", "interval": "1day", "outputsize": 10, "order": "ASC",
-    })
-    if not series or "values" not in series:
+    bars = _biquote_ohlc(GOLD_SYMBOL, "1d", 10)
+    if not bars:
         return None
 
     candles = []
-    for v in series["values"]:
+    for v in bars:
         try:
             candles.append({
-                "date": v["datetime"],
+                "date": v["openTime"][:10],
                 "open": float(v["open"]), "high": float(v["high"]),
                 "low": float(v["low"]), "close": float(v["close"]),
+                "is_open": bool(v.get("isOpen", False)),
             })
         except (KeyError, TypeError, ValueError):
             continue
@@ -704,16 +733,15 @@ def fetch_gold_price_data():
     if not candles:
         return None
 
-    # Skip today's bar if the API included a still-forming partial one, then
-    # walk backward past any degenerate/flat bars (high == low) to find the
-    # last genuinely complete daily candle - this is the same defensive check
-    # that caught the earlier flat-candle bug, kept here in case any data
-    # provider ever serves one.
-    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-    usable = [c for c in candles if c["date"] != today_str] or candles
+    # bars are newest-first; drop the still-forming bar using biquote's own
+    # isOpen flag (no more guessing by comparing dates against "today" the
+    # way the old Twelve Data check had to), then walk forward past any
+    # degenerate/flat bars (high == low) to find the last genuinely complete
+    # daily candle.
+    usable = [c for c in candles if not c["is_open"]] or candles
 
     y = None
-    for candidate in reversed(usable):
+    for candidate in usable:
         if candidate["high"] > candidate["low"]:
             y = candidate
             break
@@ -775,36 +803,35 @@ def format_price_context(pd_):
 
 def fetch_recent_30m_close():
     """
-    Fetches the most recently CLOSED 30-minute candle for XAU/USD via Twelve
-    Data (index 1 of a descending-order series, since index 0 may still be
-    forming). Used to confirm or reject the pin-bar setup below, and to
+    Fetches the most recently CLOSED 30-minute candle for XAU/USD via
+    biquote.io - the first bar in its (newest-first) OHLC response that
+    isn't flagged isOpen (see _latest_closed_bar), rather than a fixed array
+    position. Used to confirm or reject the pin-bar setup below, and to
     anchor stop-loss placement (below the candle's low for a buy, above its
     high for a sell). Returns {"close":, "low":, "high":, "time_label":} or
     None.
 
-    Requests an explicit UTC timezone from Twelve Data (rather than trusting
-    whatever "exchange" default timezone it might otherwise use) and converts
-    to the same DISPLAY_TZ_LABEL convention as the calendar, with the full
-    date included - a bare time with no date/timezone label is exactly the
-    kind of thing that causes confusion about which day's candle this is.
+    biquote's openTime is always UTC ISO 8601 ("...Z"); this converts it to
+    the same DISPLAY_TZ_LABEL convention as the calendar, with the full date
+    included - a bare time with no date/timezone label is exactly the kind
+    of thing that causes confusion about which day's candle this is.
     """
-    series = _twelvedata_request("time_series", {
-        "symbol": "XAU/USD", "interval": "30min", "outputsize": 5, "order": "DESC",
-        "timezone": "UTC",
-    })
-    if not series or "values" not in series or len(series["values"]) < 2:
+    bars = _biquote_ohlc(GOLD_SYMBOL, "30m", 5)
+    if not bars:
+        return None
+    bar = _latest_closed_bar(bars)
+    if not bar:
         return None
     try:
-        v = series["values"][1]
-        dt_utc = datetime.datetime.strptime(v["datetime"], "%Y-%m-%d %H:%M:%S").replace(
+        dt_utc = datetime.datetime.strptime(bar["openTime"], "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=datetime.timezone.utc
         )
         display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
         dt_display = dt_utc.astimezone(display_tz)
         return {
-            "close": float(v["close"]),
-            "low": float(v["low"]),
-            "high": float(v["high"]),
+            "close": float(bar["close"]),
+            "low": float(bar["low"]),
+            "high": float(bar["high"]),
             "time_label": dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
         }
     except (KeyError, TypeError, ValueError):
@@ -813,30 +840,38 @@ def fetch_recent_30m_close():
 
 def fetch_latest_5m_open():
     """
-    Fetches the most recently formed 5-minute candle's OPEN price for
-    XAU/USD, used by the price-alert watcher to check "did a new low-
-    timeframe candle just open beyond the previous 30-minute candle's
-    range". Uses index 0 (the newest bar) deliberately, unlike
-    fetch_recent_30m_close's index 1 - we want the open of whatever candle
-    JUST started, not the previous complete one.
+    Fetches the most recently CLOSED 5-minute candle's OPEN price for
+    XAU/USD via biquote.io, used by the price-alert watcher to check "did
+    the newest low-timeframe candle open beyond the previous 30-minute
+    candle's range".
+
+    Reads the first bar in biquote's (newest-first) OHLC response that isn't
+    flagged isOpen (see _latest_closed_bar) - never the still-forming one.
+    Twelve Data (the previous provider here) didn't freeze a forming
+    candle's "open" the way it freezes a closed one, so reading its current
+    bar produced at least one real alert with a fabricated-looking open
+    price (reported ~13 points away from the candle's true open). biquote
+    flags this explicitly via isOpen rather than leaving it to guesswork, so
+    this only ever trusts a bar biquote itself calls closed. Worst case, an
+    alert lands up to one extra 5-minute watcher cycle late - the price in
+    it is always real, settled data either way.
 
     Returns {"open":, "time_label":} or None.
     """
-    series = _twelvedata_request("time_series", {
-        "symbol": "XAU/USD", "interval": "5min", "outputsize": 2, "order": "DESC",
-        "timezone": "UTC",
-    })
-    if not series or "values" not in series or len(series["values"]) < 1:
+    bars = _biquote_ohlc(GOLD_SYMBOL, "5m", 5)
+    if not bars:
+        return None
+    bar = _latest_closed_bar(bars)
+    if not bar:
         return None
     try:
-        v = series["values"][0]
-        dt_utc = datetime.datetime.strptime(v["datetime"], "%Y-%m-%d %H:%M:%S").replace(
+        dt_utc = datetime.datetime.strptime(bar["openTime"], "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=datetime.timezone.utc
         )
         display_tz = datetime.timezone(datetime.timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
         dt_display = dt_utc.astimezone(display_tz)
         return {
-            "open": float(v["open"]),
+            "open": float(bar["open"]),
             "time_label": dt_display.strftime("%b %d, %H:%M") + f" {DISPLAY_TZ_LABEL}",
         }
     except (KeyError, TypeError, ValueError):
@@ -848,10 +883,12 @@ def check_price_breakout_alert():
     The price-alert watcher's core check, run every 5 minutes by
     calendar-watcher-style scheduling:
 
-    1. GATE: is the latest 5-minute candle's open price inside EITHER pin
-       zone's FULL wick range (0%-100%, not just the narrow green zone) -
+    1. GATE: is the latest CLOSED 5-minute candle's open price inside EITHER
+       pin zone's FULL wick range (0%-100%, not just the narrow green zone) -
        using yesterday's cached OHLC (see save_yesterday_pin_zones), no
-       fresh daily-series API call needed for this part.
+       fresh daily-series API call needed for this part. Deliberately reads
+       the last closed 5-minute bar rather than the still-forming one (see
+       fetch_latest_5m_open) since a forming bar's "open" isn't reliable.
     2. TRIGGER: does that same open price break above the previous 30-minute
        candle's high, or below its low.
     3. DEDUP: only returns an alert once per (direction, reference 30-minute
