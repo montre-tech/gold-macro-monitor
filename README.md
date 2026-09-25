@@ -22,11 +22,19 @@ Actions is free for public repos, and Gemini's free tier needs no credit card.
 3. **Add repository secrets.** In your repo: Settings → Secrets and variables →
    Actions → New repository secret. Add:
    - `GEMINI_API_KEY` (required) — the key from step 2.
+   - `GROQ_API_KEY` (optional, recommended) — automatic fallback if Gemini's
+     free-tier limit is hit or it's otherwise unavailable for a run. Get a
+     free key (no credit card) at https://console.groq.com/keys. Without it,
+     a Gemini failure just falls back to republishing the last successful
+     report instead.
    - `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_TO` (optional) — only if you also want it
      emailed to you. Use a Gmail address for `EMAIL_USER` and a Gmail
      [App Password](https://myaccount.google.com/apppasswords) (not your normal
      password) for `EMAIL_PASS`. If you skip these, the script just publishes to
      GitHub Pages and skips email — nothing breaks.
+
+   Gold price/candle data comes from [biquote.io](https://biquote.io) — free,
+   no key or signup needed, so there's nothing to add for that part to work.
 
 4. **Enable GitHub Pages.** Settings → Pages → Source: "Deploy from a branch" →
    Branch: `main`, folder: `/docs` → Save. GitHub will give you a URL like
@@ -52,7 +60,12 @@ Actions is free for public repos, and Gemini's free tier needs no credit card.
 - **Workflow fails on the Gemini call** — check the Actions log for the exact error.
   If it says a model is no longer available, add a repo secret `GEMINI_MODEL` set to
   whatever name Google's error message recommends (the code already reads this from
-  an env var, no code changes needed).
+  an env var, no code changes needed). If Gemini is just hitting its free-tier rate
+  limit often, add a `GROQ_API_KEY` secret (see step 3) so it can fall back
+  automatically instead of reusing a cached report.
+- **Price data missing from the daily brief or the alert watcher** — biquote.io
+  needs no key, but it's still a live third-party API; check the Actions log for
+  a `biquote API error` or `biquote request ... failed` line for the actual cause.
 - **Workflow fails on `git push`** — make sure the workflow has `permissions: contents: write`
   (already set in both YAML files) and that your repo's Settings → Actions → General →
   Workflow permissions is set to "Read and write permissions".
