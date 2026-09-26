@@ -2057,44 +2057,103 @@ def rebuild_archive_index():
         print(f"Could not write archive index: {e}")
 
 
-def build_telegram_digest(title, subtitle, sections):
+def build_telegram_digest(title, subtitle, sections, raw_analysis=None):
     """
-    Builds a Telegram-safe message containing the Directional View,
-    Geopolitical Oil Transmission, and Economic Calendar & Positioning
-    sections in full - not a link-out digest. Telegram's HTML parse_mode
-    only supports a small tag subset (b, i, u, s, a, code, pre), so styling
-    here is limited to bold labels, not the full CSS/card layout of the
-    email/web version.
+    Builds the COMPLETE analysis as a Telegram-safe message - every section
+    the model wrote (What Changed, Real Yield, Geopolitical Oil Transmission,
+    Directional View, Why Not The Opposite Case, Economic Calendar &
+    Positioning where present, What Would Change My Mind), in the same order
+    the web/email version uses. This used to send only a curated subset
+    (Directional View, Geopolitical, Calendar) - the rest of the analysis
+    simply never reached Telegram, which read as truncation even though
+    nothing was actually cut mid-sentence. Telegram's HTML parse_mode only
+    supports a small tag subset (b, i, u, s, a, code, pre), so styling here
+    is limited to bold labels, not the full CSS/card layout of the email/web
+    version. A message longer than Telegram's per-message limit is handled
+    by maybe_send_telegram splitting it into multiple sequential messages -
+    this function just assembles the full text.
+
+    If `sections` came back empty (parse_sections found no matching headers -
+    a rare malformed-response edge case), falls back to raw_analysis so
+    Telegram still gets the complete text rather than nothing at all, the
+    same safety net build_newsletter_html already has for the web page.
     """
+    order = ["changed", "yield", "geopolitical", "direction", "opposite", "calendar", "mind"]
     lines = [f"<b>{escape_html(title)}</b>", escape_html(subtitle), ""]
 
-    if "direction" in sections:
-        fb_value, pivot_value, stripped = extract_direction_summary(sections["direction"])
-        if fb_value or pivot_value:
-            c = pivot_badge(pivot_value)
-            label_bits = []
-            if fb_value:
-                label_bits.append(f"Fundamental: {fb_value}")
-            if pivot_value:
-                label_bits.append(f"Extreme Pivots: {pivot_value}")
-            lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {' | '.join(label_bits)}</b>")
-            lines.append(escape_html(stripped))
+    if not sections:
+        if raw_analysis:
+            lines.append(escape_html(raw_analysis))
+        return "\n".join(lines).strip()
+
+    for key in order:
+        if key not in sections:
+            continue
+        if key == "direction":
+            fb_value, pivot_value, stripped = extract_direction_summary(sections["direction"])
+            if fb_value or pivot_value:
+                c = pivot_badge(pivot_value)
+                label_bits = []
+                if fb_value:
+                    label_bits.append(f"Fundamental: {fb_value}")
+                if pivot_value:
+                    label_bits.append(f"Extreme Pivots: {pivot_value}")
+                lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {' | '.join(label_bits)}</b>")
+                lines.append(escape_html(stripped))
+            else:
+                c = direction_color(sections["direction"])
+                lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {c['label']}</b>")
+                lines.append(escape_html(sections["direction"]))
         else:
-            c = direction_color(sections["direction"])
-            lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {c['label']}</b>")
-            lines.append(escape_html(sections["direction"]))
+            meta = SECTION_META[key]
+            lines.append(f"{meta['icon']} <b>{escape_html(meta['label'])}</b>")
+            lines.append(escape_html(sections[key]))
         lines.append("")
-
-    if "geopolitical" in sections:
-        lines.append("\U0001F30D <b>Geopolitical Oil Transmission</b>")
-        lines.append(escape_html(sections["geopolitical"]))
-        lines.append("")
-
-    if "calendar" in sections:
-        lines.append("\U0001F4C5 <b>Economic Calendar &amp; Positioning</b>")
-        lines.append(escape_html(sections["calendar"]))
 
     return "\n".join(lines).strip()
+
+
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _split_telegram_message(text, limit=TELEGRAM_MESSAGE_LIMIT):
+    """
+    Splits `text` into chunks that each fit under Telegram's per-message
+    character limit, breaking on blank-line (paragraph/section) boundaries
+    so a chunk boundary never lands mid-sentence. If a single paragraph is
+    itself longer than the limit (very unlikely for prose, but a safety
+    net), it gets hard-split on whitespace as a last resort. Returns a list
+    of 1+ chunks; a single-element list means no splitting was needed.
+    """
+    if len(text) <= limit:
+        return [text]
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current = ""
+    for p in paragraphs:
+        candidate = (current + "\n\n" + p) if current else p
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(p) <= limit:
+            current = p
+        else:
+            words = p.split(" ")
+            piece = ""
+            for w in words:
+                cand = (piece + " " + w) if piece else w
+                if len(cand) <= limit:
+                    piece = cand
+                else:
+                    chunks.append(piece)
+                    piece = w
+            current = piece
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def maybe_send_telegram(message_text):
@@ -2102,6 +2161,13 @@ def maybe_send_telegram(message_text):
     Sends a message via the Telegram Bot API if TELEGRAM_BOT_TOKEN and
     TELEGRAM_CHAT_ID are set as secrets; otherwise skips quietly (same
     optional-and-safe pattern as maybe_send_email).
+
+    Splits into multiple sequential messages when message_text exceeds
+    Telegram's ~4096-character-per-message limit, rather than truncating or
+    letting the whole send fail outright - build_telegram_digest now sends
+    the COMPLETE analysis (every section, not a curated subset), which on a
+    normal week comfortably exceeds one message's worth. Every part of the
+    analysis should actually reach Telegram.
 
     Setup: message @BotFather on Telegram, send /newbot, follow the prompts
     to get a bot token. Then send any message to your new bot, and visit
@@ -2114,16 +2180,20 @@ def maybe_send_telegram(message_text):
         print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set - skipping Telegram send.")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message_text, "parse_mode": "HTML"}
-    try:
-        resp = requests.post(url, json=payload, timeout=20)
-        data = resp.json()
-        if not data.get("ok"):
-            print(f"Telegram send failed: {data}")
-        else:
-            print("Telegram message sent.")
-    except (requests.RequestException, ValueError) as e:
-        print(f"Telegram send failed: {e}")
+    chunks = _split_telegram_message(message_text)
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        text = chunk if total == 1 else f"{chunk}\n\n<i>(part {i}/{total})</i>"
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        try:
+            resp = requests.post(url, json=payload, timeout=20)
+            data = resp.json()
+            if not data.get("ok"):
+                print(f"Telegram send failed (part {i}/{total}): {data}")
+            else:
+                print(f"Telegram message sent (part {i}/{total}).")
+        except (requests.RequestException, ValueError) as e:
+            print(f"Telegram send failed (part {i}/{total}): {e}")
 
 
 MQL5_DIV_RE = re.compile(r'<div class="ec-table__item ec-table__item_inline">(.*?)</div>', re.DOTALL)
