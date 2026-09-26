@@ -35,6 +35,8 @@ LAST_WEEKLY_ANALYSIS_PATH = os.path.join(STATE_DIR, "last_weekly_analysis.json")
 CALENDAR_WATCH_STATE_PATH = os.path.join(STATE_DIR, "calendar_watch_state.json")
 YESTERDAY_PIN_ZONES_PATH = os.path.join(STATE_DIR, "yesterday_pin_zones.json")
 PRICE_ALERT_STATE_PATH = os.path.join(STATE_DIR, "price_alert_state.json")
+LAST_NETS_PATH = os.path.join(STATE_DIR, "last_nets.json")
+LAST_INVALIDATION_PATH = os.path.join(STATE_DIR, "last_invalidation.json")
 
 # Prefixes ask_gemini() returns on failure (see that function) - checked against
 # the start of its return value to distinguish a genuine analysis from an error
@@ -107,6 +109,79 @@ def save_last_weekly_analysis(date_str, analysis_text, extra=None):
     if extra:
         data.update(extra)
     _save_json_state(LAST_WEEKLY_ANALYSIS_PATH, data)
+
+
+def load_last_nets():
+    """Returns {"date":, "nets": [...]} from the last GENUINE daily run, or None."""
+    return _load_json_state(LAST_NETS_PATH)
+
+
+def save_last_nets(nets, date_str):
+    """
+    Persists the three per-section "Net implication: BULLISH|BEARISH|NEUTRAL"
+    values extracted from today's fresh analysis (see extract_net_implications),
+    so tomorrow's prompt can hold the model accountable for any flip via
+    build_nets_consistency_block(). Only call this with a genuine fresh set of
+    exactly 3 - a partial or cached run should not overwrite this.
+    """
+    _save_json_state(LAST_NETS_PATH, {"date": date_str, "nets": nets})
+
+
+def build_nets_consistency_block():
+    """
+    Builds the NET IMPLICATIONS CONSISTENCY prompt block from yesterday's
+    saved nets (sections 1/2/3: WHAT CHANGED / REAL YIELD / GEOPOLITICAL OIL
+    TRANSMISSION), or "" if none is saved yet (first run). This is what makes
+    the "you MUST explain what changed if a net flips" instruction in the
+    style guide's COHERENCE PROTOCOL enforceable - without a concrete prior
+    value to compare against, the model has nothing to be held accountable
+    to and can silently re-derive a different set of three every day.
+    """
+    prev = load_last_nets()
+    if not prev or len(prev.get("nets", [])) < 3:
+        return ""
+    n = prev["nets"]
+    return (
+        f"\n\nPRIOR RUN'S SECTION-LEVEL NET IMPLICATIONS (from {prev['date']}) - you MUST "
+        "compare your own three net implications against these. If any of yours differs from "
+        "the corresponding prior value, that section's Net implication line explaining the "
+        "specific new data point that flipped it is not optional - state it plainly:\n"
+        f"  Section 1 (WHAT CHANGED) was: {n[0]}\n"
+        f"  Section 2 (REAL YIELD / RATE LINKAGE) was: {n[1]}\n"
+        f"  Section 3 (GEOPOLITICAL OIL TRANSMISSION) was: {n[2]}"
+    )
+
+
+def load_last_invalidation():
+    """Returns {"date":, "content": <WHAT WOULD CHANGE MY MIND text>} or None."""
+    return _load_json_state(LAST_INVALIDATION_PATH)
+
+
+def save_last_invalidation(content, date_str):
+    """
+    Persists today's fresh "WHAT WOULD CHANGE MY MIND" section text so
+    tomorrow's run can anchor to it (see build_invalidation_consistency_block)
+    instead of freely re-inventing a different set of invalidation triggers
+    every day, which the style guide explicitly warns against.
+    """
+    _save_json_state(LAST_INVALIDATION_PATH, {"date": date_str, "content": content})
+
+
+def build_invalidation_consistency_block():
+    """
+    Builds the INVALIDATION CONSISTENCY prompt block from yesterday's saved
+    "WHAT WOULD CHANGE MY MIND" text, or "" if none is saved yet.
+    """
+    prev = load_last_invalidation()
+    if not prev or not prev.get("content"):
+        return ""
+    return (
+        f"\n\nINVALIDATION CONSISTENCY BLOCK (yesterday's WHAT WOULD CHANGE MY MIND, from "
+        f"{prev['date']}) - use this as the starting point for today's section 6 anchors. Only "
+        "change one of the four anchors if the input data genuinely no longer supports it, and "
+        "say explicitly what changed if you do - do not silently swap in a different set of "
+        f"triggers:\n{prev['content']}"
+    )
 
 def load_calendar_watch_state():
     """Reads the set of event keys already alerted on by the calendar watcher,
@@ -210,75 +285,200 @@ CARRY_TRADE_FRAMEWORK = (
     "main effect is signaling the central banks' shared discomfort with the rate divergence, which "
     "shapes market expectations about future policy paths. Do not treat intervention headlines as if "
     "they mechanically move US yields on their own.\n"
-    "- OIL PRICES feed into headline inflation (the energy component of CPI) and therefore into "
-    "inflation expectations and rate-hike odds - rising oil prices are a hawkish input (higher "
-    "expected inflation -> higher expected rates -> higher real yields -> headwind for gold), "
-    "falling oil prices work the other way. When headlines mention an oil price level or move, "
-    "state the actual figure/direction given and reason through this chain explicitly rather than "
-    "vaguely gesturing at \"oil affects inflation\".\n"
-    "- GEOPOLITICAL TENSION (wars, conflicts, sanctions, military escalation) drives gold through a "
-    "DIFFERENT, more direct channel than the two above: safe-haven demand. This can push gold up "
-    "even when real yields are rising and would otherwise argue for lower gold - the two forces can "
-    "run in opposite directions at the same time, and a rising oil price during an escalation is "
-    "often ITSELF a symptom of the same geopolitical tension (e.g. Middle East conflict affecting "
-    "both oil supply fears and safe-haven flows simultaneously), not two unrelated inputs. When "
-    "headlines mention geopolitical tension, explicitly weigh this safe-haven channel against the "
-    "real-yield channel rather than only applying one."
+    "Note: oil prices and geopolitical tension are handled by the separate GEOPOLITICAL OIL "
+    "TRANSMISSION framework below, not here - do not re-derive that chain from scratch."
+)
+
+GEOPOLITICAL_OIL_FRAMEWORK = (
+    "GEOPOLITICAL OIL TRANSMISSION - INTERNAL REASONING (do not show this reasoning in the output):\n"
+    "Before writing the brief, silently work through the full transmission chain to arrive at your "
+    "conclusion. Do not surface any of these steps in the output - the output only carries the final "
+    "synthesis (below).\n\n"
+    "LAYER 1 - SHOCK CLASSIFICATION (internal only): Classify the geopolitical oil shock as supply "
+    "vs demand, realized vs threatened, which chokepoint is affected (Hormuz ~20% of global supply, "
+    "Red Sea ~12%, Russian infrastructure ~8%, Saudi East-West pipeline ~4%), and whether it is "
+    "transient or structural. Supply shocks are stagflationary; demand shocks are disinflationary. "
+    "Threat-only events usually produce a spike-and-fade, not a sustained shift.\n\n"
+    "LAYER 2 - OIL PRICE TRANSLATION (internal only): Estimate the geopolitical risk premium embedded "
+    "in the current price using a rough ~$4/bbl per 1 million bpd disrupted heuristic. Check whether "
+    "the Brent-WTI spread is widening (confirms seaborne supply risk) or narrowing (risk being "
+    "absorbed). Note short-run demand elasticity is approximately -0.03, so prices must move violently "
+    "to clear even small supply gaps.\n\n"
+    "LAYER 3 - YIELD TRANSMISSION (internal only): Connect oil to breakevens and real yields. A "
+    "supply shock that raises long-term inflation expectations faster than nominal yields lowers "
+    "real yields (gold-positive). If nominals stay sticky while oil falls, real yields rise "
+    "(gold-negative). The oil/yield divergence is the key signal.\n\n"
+    "LAYER 4 - FED REACTION FUNCTION (used in output synthesis): The Fed historically does NOT hike "
+    "on supply shocks - it holds and \"looks through\" them. The bar for a hike is long-term inflation "
+    "expectations de-anchoring. If recession risk rises, the Fed tilts to cuts. Determine a concrete "
+    "expectation: hold, hike, or cut, and over what horizon.\n\n"
+    "LAYER 5 - SYNTHESIS (used in output synthesis): Combine into a single net gold bias from the oil "
+    "chain: BULLISH (supply shock -> breakevens up -> real yields down -> Fed holds/cuts), BEARISH "
+    "(demand shock -> oil down -> nominals sticky -> real yields up -> Fed hawkish; or supply shock "
+    "forcing a hike), or NEUTRAL (threat-only spike that fades). State the confidence level and the "
+    "single biggest reason.\n\n"
+    "OUTPUT REQUIREMENT: In the GEOPOLITICAL OIL TRANSMISSION section of the brief, write EXACTLY "
+    "TWO SENTENCES synthesizing LAYER 4 and LAYER 5 only. Do NOT mention \"layers\", \"Layer 1-5\", or "
+    "any internal reasoning steps. Do NOT include the historical chain, chokepoint enumeration, "
+    "elasticity discussion, or premium estimation - those are background. The two sentences must "
+    "state (1) the Fed reaction expectation and (2) the net gold bias from the oil chain with "
+    "confidence and the biggest reason. If OIL PRICE DATA below says unavailable, reason only "
+    "from the news headlines and say the oil price itself is unavailable this run - never invent "
+    "a number."
 )
 
 ANALYSIS_STYLE_GUIDE = (
     "Write like an experienced macro/futures analyst briefing a trader who already "
     "understands the market - not like a news summary. Do not just restate the inputs "
-    "back as a list. Structure your response in six short sections with these exact "
+    "back as a list. Structure your response in SIX short sections with these exact "
     "headers:\n"
-    "1. WHAT CHANGED - compare today's inputs against YESTERDAY'S ANALYSIS given below and "
-    "state what is actually different since then - new data, a shift in tone, a level that held "
-    "or broke. If nothing meaningful changed, say so explicitly rather than padding. If no prior "
-    "analysis is available (first run), just assess today's inputs directly.\n"
+    "1. WHAT CHANGED - the one or two things that actually matter from the input, and why. "
+    "This includes the economic calendar: using the ECONOMIC CALENDAR DATA given below, which has "
+    "three possible buckets - (a) events with a confirmed actual figure: quote the exact Actual "
+    "figure, and the Forecast/Previous figures for comparison, directly from that block (do not "
+    "paraphrase, round, or approximate it), and state whether it beat, met, or missed forecast and "
+    "what that implies; (b) events whose scheduled time has passed but this feed has no actual "
+    "figure yet: these DID happen, so treat them as released, not upcoming - check the TARGETED "
+    "HEADLINE SEARCH FOR MISSING ACTUALS block below (if present) for the real figure, otherwise say "
+    "the outcome is not yet confirmed rather than inventing one; (c) events still ahead today: only "
+    "mention these briefly as context for what to watch, do not invent a figure for them. If the "
+    "calendar data starts with a NOTE saying no events are scheduled today, treat the listed events "
+    "as recent context the market is still digesting. If compared against YESTERDAY'S ANALYSIS given "
+    "below nothing meaningful changed, say so explicitly rather than padding. If no prior analysis is "
+    "available (first run), just assess today's inputs directly. END THIS SECTION WITH A SINGLE LINE "
+    "in this exact format: \"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line reason].\"\n"
     "2. REAL YIELD / RATE LINKAGE - reason through how this connects to US real yields "
-    "(nominal rates minus inflation expectations), since that is the dominant driver of gold. If "
-    "the headlines mention oil prices or geopolitical tension, explicitly apply the OIL PRICES and "
-    "GEOPOLITICAL TENSION channels from the background framework above - these are common drivers "
-    "and often the actual mechanism behind a real-yield or safe-haven move, not side notes.\n"
-    "3. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold "
-    "over the next 1-2 weeks, with a rough confidence level (low/medium/high) and the single "
-    "biggest reason for that lean. You are also given a PIN-BAR LEVEL SETUP CHECK below, which "
-    "is a specific, already-decided trading rule (not something for you to re-derive) - if price "
-    "is inside a green zone, explicitly state the confirmation/rejection verdict and weave it "
-    "into your near-term view; if price is outside both green zones, explicitly tell the trader "
-    "to wait, state the exact pivot price to watch for, and do not suggest an entry until price "
-    "reaches it.\n"
-    "4. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction "
+    "(nominal rates minus inflation expectations), since that is the dominant driver of gold. "
+    "If OIL PRICE DATA is provided below, apply the GEOPOLITICAL OIL TRANSMISSION CHAIN "
+    "internally: classify the shock, translate it into the oil price, connect it to "
+    "breakevens and real yields, and determine the Fed reaction. Do not treat oil as a "
+    "standalone signal disconnected from real yields. END THIS SECTION WITH A SINGLE LINE "
+    "in this exact format: \"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line reason].\"\n"
+    "3. GEOPOLITICAL OIL TRANSMISSION - this is a dedicated section, but it must be SHORT. "
+    "Write EXACTLY TWO SENTENCES. Do NOT show the analytical chain, do NOT mention layers "
+    "(no \"Layer 1\", \"Layer 2\", etc.), do NOT include chokepoint enumeration, elasticity math, "
+    "premium estimation, or historical context. The FIRST sentence must state the Fed reaction "
+    "expectation (hold, hike, or cut, and over what horizon). The SECOND sentence must be "
+    "formatted exactly as: \"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line "
+    "reason].\"\n"
+    "4. DIRECTIONAL VIEW - this section starts with ONE combined summary line, followed by "
+    "THREE labelled sub-parts. The summary line comes first, on its own single line, in this "
+    "exact format:\n"
+    "   **Fundamental backdrop:** VALUE1 || **Extreme Pivots:** VALUE2\n"
+    "where VALUE1 is BULLISH, BEARISH, or NEUTRAL and VALUE2 is WAIT, BUY, or SELL (choose one "
+    "for each). Bold the two labels with ** as shown, but leave the two values as plain text - "
+    "do NOT wrap the values in asterisks and do NOT add a period after either value. This is "
+    "ONE single line - do NOT break it into two lines.\n"
+    "Then the THREE sub-parts, each with its own bold subheading starting its own paragraph:\n"
+    "   **Extreme Pivot (intraday to 3 days):** This sub-part must contain EXACTLY TWO paragraphs, "
+    "each on its own line, each labelled as described below.\n"
+    "     PARAGRAPH 1 - ACTIVE PIVOT (no label): Address the pivot nearest to the current "
+    "price. State whether price is inside a green zone. If it is inside, state the "
+    "confirmation/rejection verdict and give a concrete direction (BUY bounce, SELL fade, or "
+    "breakout continuation) with the entry level and first target. If it is outside both green "
+    "zones, say WAIT and state the exact pivot price to watch for entry - the pivot price must "
+    "be quoted verbatim from the PIN-BAR LEVEL SETUP CHECK block below. That block also tells you "
+    "which side of each pivot the current price is on and what role that pivot is playing right "
+    "now (support vs resistance) - honour that classification exactly. Keep this to two or three "
+    "sentences.\n"
+    "     PARAGRAPH 2 - SECOND PIVOT: Start this paragraph with the literal bold label "
+    "\"**Second Pivot to watch:**\" followed by the far (opposite) pin zone description, its 50% "
+    "level price, and the exact distance in POINTS from the current price. CRITICAL: both the "
+    "50% price and the point distance must be copied VERBATIM from the PIN-BAR LEVEL SETUP CHECK "
+    "block below. Do NOT recompute the 50% by averaging high and low, do NOT compute the point "
+    "distance yourself, and do NOT round differently - the values there are already derived from "
+    "yesterday's actual open/high/low/close via the pin-bar Fibonacci table. Also state the role "
+    "that pivot is currently playing (support vs resistance), which is also given in the setup "
+    "check. Then add one short guidance sentence such as \"Keep this on your radar in case today's "
+    "move extends that far.\"\n"
+    "   **Swing View (1-2 weeks):** State the broader FUNDAMENTAL directional lean for gold - "
+    "bullish, bearish, or neutral-range - with a confidence level (low/medium/high) and the "
+    "single biggest reason. You MUST state the Combined fundamental arithmetic in one line here "
+    "in the form: \"Combined fundamental lean: [Section 1 net] + [Section 2 net] + [Section 3 "
+    "net] = [overall].\" Then state the single biggest reason, which MUST name which of the "
+    "three earlier macro sections produced the dominant implication. Refer to the sections by "
+    "their TOPIC, not by number - say \"driven by the oil-price impact on inflation "
+    "expectations\" or \"driven by the real-yield channel\", NEVER \"driven by section 3\" or "
+    "\"section 2\". The reader never sees the section numbering. This must be consistent with "
+    "the Fundamental backdrop stated above. If the Fundamental backdrop is NEUTRAL but you "
+    "take a directional stance here, name the single overriding factor and justify why it "
+    "dominates the arithmetic. PRICE LANGUAGE RULE FOR THIS SUB-PART: whenever you reference "
+    "a target, a support, an invalidation, or a breakout trigger, you MUST include the concrete "
+    "price in parentheses right after the description. NEVER use abstract language such as "
+    "\"higher levels\", \"lower levels\", \"resistance\", or \"support\" on their own without the "
+    "exact price attached - the reader does not have the Fibonacci table in front of them. Every "
+    "actionable line must state a dollar value. Keep this to three or four sentences.\n"
+    "   **Reconciliation:** In one sentence, explicitly reconcile the Extreme Pivot and the Swing "
+    "View. If they agree, say so in one line. If they conflict, state the alignment condition "
+    "(e.g. \"counter-trend bounce inside a bearish swing\") and how the trader should weight the "
+    "two horizons. If the reconciliation references a level that would trigger or invalidate "
+    "either view, that level MUST be stated as a concrete price. NEVER write phrases like \"if "
+    "price breaks above the lower-pin 50% level\" or \"if support holds\" without the accompanying "
+    "dollar value - the reader must be able to place an order from the sentence alone. Never "
+    "leave the reader to reconcile the calls themselves.\n"
+    "   ROLE-FLIP RULE (mandatory, applies to Extreme Pivot, Swing View, and Reconciliation): "
+    "before describing what a level does, check which side of it the CURRENT price sits on. A "
+    "pivot ABOVE current price acts as RESISTANCE. A pivot BELOW current price acts as SUPPORT. "
+    "This overrides the level's historical role: if price has traded BELOW the lower-pin 50% "
+    "level, that level is now RESISTANCE, not support - a rally back up to it is the test to "
+    "describe, not a fall toward it. If price has traded ABOVE the upper-pin 50% level, that "
+    "level is now SUPPORT, not resistance. The PIN-BAR LEVEL SETUP CHECK below tells you the "
+    "current side and role for each pivot - use those exact classifications. When writing the "
+    "Reconciliation, describe the CURRENT relationship between price and the pivots - do NOT "
+    "describe a hypothetical move toward a level price has already reached or passed.\n"
+    "5. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction "
     "(e.g. if you lean bearish, give the honest bull case) and then explain specifically why "
     "the current data does not make that the higher-probability outcome right now. If the data "
     "shows a retracement or pullback, explicitly address whether that looks like a genuine trend "
     "reversal or a normal corrective move within a larger trend, and justify which one using the "
     "specific numbers given - do not just assert \"it is just a pullback\" without reasoning.\n"
-    "5. ECONOMIC CALENDAR & POSITIONING - using the ECONOMIC CALENDAR DATA given below, which "
-    "has three possible buckets: (a) events with a confirmed actual figure - state whether it "
-    "beat, met, or missed forecast and what that implies for rate-hike odds, the dollar, real "
-    "yields, and gold specifically, don't just restate the numbers, interpret them; (b) events "
-    "whose scheduled time has already passed but this feed has no actual figure yet - these DID "
-    "happen, so treat them as released, not upcoming, and check the TARGETED HEADLINE SEARCH FOR "
-    "MISSING ACTUALS block below (if present) for the real figure, otherwise say the outcome is "
-    "not yet confirmed rather than inventing a number; (c) events still ahead today - state what "
-    "a beat vs. a miss would each imply, and give a concrete positioning recommendation going "
-    "into that release (e.g. reduce size beforehand, avoid opening new positions right before a "
-    "High-impact print, wait for confirmation after) tied back to the DIRECTIONAL VIEW and "
-    "PIN-BAR setup above. If the calendar data starts with a NOTE saying no events are scheduled "
-    "today, that means today is a weekend/holiday with a genuinely quiet calendar - discuss the "
-    "listed events as recent context the market is still digesting (bucket (a)/(b) framing only, "
-    "since there is no \"still ahead today\" in that case), not as live same-day triggers. If the "
-    "calendar data says unavailable or empty, say so explicitly rather than inventing an event.\n"
-    "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the view.\n"
-    "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not "
+    "6. WHAT WOULD CHANGE MY MIND - the specific data point or event that would actually flip the "
+    "view. IMPORTANT: this section must be ANCHORED and STABLE across runs, not freely re-invented. "
+    "Use these anchor categories in this exact order, one sentence each, and quote concrete "
+    "numbers where the input data gives you one:\n"
+    "  (a) A price-level break: state the specific XAU/USD level from the PIN-BAR SETUP that would "
+    "invalidate the current view. Use the exact Fibonacci prices given to you, not invented ones.\n"
+    "  (b) A rates/yields break: state the specific move in US real yields or 2Y nominal yields "
+    "that would flip the view. Do not reference a level that was not given to you in the input.\n"
+    "  (c) An inflation/oil break: state the specific oil or breakeven move that would flip the "
+    "view. Only cite the current oil price that was provided to you - do not invent a new one.\n"
+    "  (d) A Fed/BOJ policy event: name the specific event type that would flip the view.\n"
+    "Do NOT invent levels, thresholds, or events that were not derivable from the input data "
+    "provided to you. Do NOT produce a different set of triggers just because the news headlines "
+    "shifted slightly - the anchors above should stay roughly stable from run to run. If an "
+    "INVALIDATION CONSISTENCY block is given below, use it as the starting point for these anchors "
+    "and only change one if the input data genuinely no longer supports it - explain what changed "
+    "if you do.\n\n"
+    "COHERENCE PROTOCOL (mandatory - apply before writing):\n"
+    "The three macro sections you write each produce a net directional implication for gold. "
+    "When you refer to any of them in the body text, name them by topic (the news/"
+    "what-changed channel, the real-yield channel, the oil-chain channel) - never by their "
+    "internal section number, because the reader does not see the numbering. Each section must "
+    "end with its Net implication line as specified above. The three net implications then "
+    "combine into a single Fundamental backdrop word that opens section 4. The Extreme Pivot "
+    "sub-part fires as the technical setup dictates and must NOT be softened to fit the "
+    "fundamentals. When the Extreme Pivot and the fundamental lean disagree, the Reconciliation "
+    "sub-part must state that explicitly as a counter-trend condition and tell the trader "
+    "which horizon to weight. Do not reverse the technical signal to match the fundamentals. "
+    "Do not reverse the fundamentals to match the technicals. State both, state the "
+    "reconciliation, and let the trader decide with full information. If a NET IMPLICATIONS "
+    "CONSISTENCY block is given below, you MUST explain in that section's own Net implication "
+    "line the specific new data point that flipped it, whenever a net differs from the prior run.\n\n"
+    "Keep the whole thing under 650 words. Be decisive but honest about uncertainty - do not "
     "hedge every sentence, but do not overstate confidence either. This is analysis to inform "
     "a decision, not investment advice, and you can note that briefly at the end.\n\n"
     "CRITICAL PRICE RULE: only reference the exact current price and Fibonacci levels given to "
-    "you explicitly in the CURRENT PRICE DATA section below - never invent, round differently, "
-    "or state any other specific price level. If that section says price data is unavailable, "
-    "do not state any specific price or price range at all - describe direction only in "
-    "relative terms (e.g. 'further downside pressure from current levels').\n\n"
+    "you explicitly in the CURRENT PRICE DATA section below, and the exact oil price/percentage "
+    "change given in OIL PRICE DATA if provided - never invent, round differently, or state any "
+    "other specific price level for either instrument. If either section says its data is "
+    "unavailable, do not state any specific price or price range for that instrument at all - "
+    "describe direction only in relative terms (e.g. 'further downside pressure from current levels').\n\n"
+    "CONCRETE-LEVEL RULE (applies to every section, not just Directional View): the reader of "
+    "this brief does NOT have the Fibonacci table in front of them. Whenever you refer to a "
+    "target, a support, an invalidation, a breakout trigger, or any other price level, you "
+    "MUST follow the description with the concrete price in parentheses. Every actionable "
+    "sentence must be executable from the numbers alone, without the reader needing to look "
+    "anything up. If you cannot name the specific price, do not name the level at all.\n\n"
     "AFTER completing all six sections above, if a TARGETED HEADLINE SEARCH FOR MISSING ACTUALS "
     "block was provided, append one line per event listed in it, in EXACTLY this format so the "
     "figure can be captured programmatically for the archive:\n"
@@ -292,21 +492,30 @@ ANALYSIS_STYLE_GUIDE = (
 WEEKLY_ANALYSIS_STYLE_GUIDE = (
     "Write like an experienced macro/futures analyst briefing a trader on the week's positioning "
     "picture - not a news summary. Do not just restate the inputs back as a list. Structure your "
-    "response in six short sections with these exact headers:\n"
+    "response in SEVEN short sections with these exact headers:\n"
     "1. WHAT CHANGED - the one or two things that actually matter from this week's COT report "
-    "and/or economic data, and why.\n"
+    "and/or economic data, and why. END THIS SECTION WITH A SINGLE LINE in this exact format: "
+    "\"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line reason].\"\n"
     "2. REAL YIELD / RATE LINKAGE - reason through how this week's data connects to US real yields "
     "(nominal rates minus inflation expectations), since that is the dominant driver of gold. If "
-    "the trend-finding news mentions oil prices or geopolitical tension, explicitly apply the OIL "
-    "PRICES and GEOPOLITICAL TENSION channels from the background framework above.\n"
-    "3. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold heading "
+    "OIL PRICE DATA is provided below, apply the GEOPOLITICAL OIL TRANSMISSION CHAIN internally "
+    "rather than treating oil as a standalone signal. END THIS SECTION WITH A SINGLE LINE in this "
+    "exact format: \"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line reason].\"\n"
+    "3. GEOPOLITICAL OIL TRANSMISSION - a dedicated section, but SHORT. Write EXACTLY TWO "
+    "SENTENCES. Do NOT show the analytical chain or mention layers. The FIRST sentence states the "
+    "Fed reaction expectation (hold, hike, or cut, and over what horizon). The SECOND sentence is "
+    "formatted exactly as: \"Net implication: BULLISH|BEARISH|NEUTRAL for gold - [one-line "
+    "reason].\"\n"
+    "4. DIRECTIONAL VIEW - give a clear lean (bullish / bearish / neutral-range) for gold heading "
     "into next week, with a rough confidence level (low/medium/high) and the single biggest reason "
     "for that lean, synthesizing the COT positioning read and this week's data releases together. "
-    "There is no pin-bar or intraday setup data for a weekly report - do not reference one.\n"
-    "4. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction (e.g. "
+    "This should be broadly consistent with the three Net implication lines above - if it isn't, "
+    "say explicitly what overrides them and why. There is no pin-bar or intraday setup data for a "
+    "weekly report - do not reference one.\n"
+    "5. WHY NOT THE OPPOSITE CASE - state the strongest argument for the opposite direction (e.g. "
     "if you lean bearish, give the honest bull case) and explain specifically why the current data "
     "does not make that the higher-probability outcome right now.\n"
-    "5. ECONOMIC CALENDAR & POSITIONING - using the WEEKLY ECONOMIC CALENDAR DATA given below, "
+    "6. ECONOMIC CALENDAR & POSITIONING - using the WEEKLY ECONOMIC CALENDAR DATA given below, "
     "summarize the highest-impact USD/JPY releases from the PAST week (not today specifically - "
     "this report looks back over the whole week), state whether each beat, met, or missed forecast, "
     "and what that implies for rate-hike odds, the dollar, real yields, and gold - don't just "
@@ -319,27 +528,36 @@ WEEKLY_ANALYSIS_STYLE_GUIDE = (
     "Treat the calendar data and the trend search as one connected argument, not two separate "
     "topics. If either input says unavailable or empty, say so explicitly rather than inventing "
     "a release or a trend.\n"
-    "6. WHAT WOULD CHANGE MY MIND - the specific data point, COT shift, or event next week that "
+    "7. WHAT WOULD CHANGE MY MIND - the specific data point, COT shift, or event next week that "
     "would actually flip the view.\n"
-    "Keep the whole thing under 500 words. Be decisive but honest about uncertainty - do not hedge "
+    "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not hedge "
     "every sentence, but do not overstate confidence either. This is analysis to inform a decision, "
-    "not investment advice, and you can note that briefly at the end."
+    "not investment advice, and you can note that briefly at the end.\n\n"
+    "CRITICAL PRICE RULE: only reference the exact oil price/percentage change given in OIL PRICE "
+    "DATA if provided - never invent one. If that section says unavailable, do not state any "
+    "specific oil price at all."
 )
 
 SECTION_HEADERS = [
-    ("changed", r"\**\s*1\.\s*WHAT CHANGED\s*\**:?"),
-    ("yield", r"\**\s*2\.\s*REAL YIELD.*?LINKAGE\s*\**:?"),
-    ("direction", r"\**\s*3\.\s*DIRECTIONAL VIEW\s*\**:?"),
-    ("opposite", r"\**\s*4\.\s*WHY NOT THE OPPOSITE CASE\s*\**:?"),
-    ("calendar", r"\**\s*5\.\s*ECONOMIC CALENDAR[^\n]*POSITIONING\s*\**:?"),
-    ("mind", r"\**\s*6\.\s*WHAT WOULD CHANGE MY MIND\s*\**:?"),
+    # Number prefixes are matched loosely (\d+ not a literal "1") because the
+    # daily and weekly guides now number these differently (weekly has an
+    # extra ECONOMIC CALENDAR & POSITIONING section daily doesn't have) - the
+    # header TEXT is unique enough to match unambiguously either way.
+    ("changed", r"\**\s*\d+\.\s*WHAT CHANGED\s*\**:?"),
+    ("yield", r"\**\s*\d+\.\s*REAL YIELD.*?LINKAGE\s*\**:?"),
+    ("geopolitical", r"\**\s*\d+\.\s*GEOPOLITICAL OIL TRANSMISSION\s*\**:?"),
+    ("direction", r"\**\s*\d+\.\s*DIRECTIONAL VIEW\s*\**:?"),
+    ("opposite", r"\**\s*\d+\.\s*WHY NOT THE OPPOSITE CASE\s*\**:?"),
+    ("calendar", r"\**\s*\d+\.\s*ECONOMIC CALENDAR[^\n]*POSITIONING\s*\**:?"),
+    ("mind", r"\**\s*\d+\.\s*WHAT WOULD CHANGE MY MIND\s*\**:?"),
 ]
 
 SECTION_META = {
     "changed": {"label": "What Changed", "icon": "\U0001F4CC", "color": "#34495e"},
     "yield": {"label": "Real Yield / Rate Linkage", "icon": "\U0001F4B5", "color": "#2980b9"},
+    "geopolitical": {"label": "Geopolitical Oil Transmission", "icon": "\U0001F30D", "color": "#c0392b"},
     "opposite": {"label": "Why Not The Opposite Case", "icon": "\U0001F50E", "color": "#8e44ad"},
-    "calendar": {"label": "Economic Calendar & Positioning", "icon": "\U0001F4C5", "color": "#c0392b"},
+    "calendar": {"label": "Economic Calendar & Positioning", "icon": "\U0001F4C5", "color": "#16a085"},
     "mind": {"label": "What Would Change My Mind", "icon": "\u26A0\uFE0F", "color": "#b7791f"},
 }
 
@@ -459,6 +677,39 @@ def parse_sections(text):
     return sections
 
 
+SECTION_REF_RE = re.compile(r"\bsection\s+\d+\b", re.IGNORECASE)
+
+
+def strip_section_refs(text):
+    """
+    Safety-net cleanup applied to the raw model output before parsing: the
+    style guide explicitly forbids referring to "section 3" etc in the body
+    text (the reader never sees the section numbering, and daily/weekly now
+    number sections differently anyway), but models don't always follow an
+    instruction like that with 100% consistency. Rather than leave a stray
+    "as discussed in section 2" in a published report, this strips any
+    leftover "section N" phrase outright - the surrounding sentence should
+    still read fine without it since the instruction already asks for
+    topic-based references ("the real-yield channel") alongside it.
+    """
+    return SECTION_REF_RE.sub("", text)
+
+
+NET_IMPLICATION_RE = re.compile(r"Net implication:\s*(BULLISH|BEARISH|NEUTRAL)\b", re.IGNORECASE)
+
+
+def extract_net_implications(analysis_text):
+    """
+    Pulls every "Net implication: BULLISH|BEARISH|NEUTRAL" line the model
+    wrote (one is required at the end of each of sections 1-3 per the style
+    guide) in the order they appear. Used to (a) log a quick same-run sanity
+    check and (b) persist for the next run's NET IMPLICATIONS CONSISTENCY
+    block, which asks the model to justify any flip rather than silently
+    re-deriving a different set of three each day.
+    """
+    return [m.upper() for m in NET_IMPLICATION_RE.findall(analysis_text)]
+
+
 def direction_color(text):
     # "arrow" is a plain Unicode triangle character (not a colored emoji), so it
     # renders in whatever CSS color the surrounding span sets - this matters
@@ -472,6 +723,48 @@ def direction_color(text):
     if re.search(r"bullish", text, re.IGNORECASE):
         return {"color": "#1e8449", "bg": "#eafaf1", "label": "BUY", "arrow": "\u25B2", "telegram_icon": "\U0001F4C8"}
     return {"color": "#b7791f", "bg": "#fef9e7", "label": "NEUTRAL / WAIT", "arrow": "\u25B6", "telegram_icon": "\u27A1\uFE0F"}
+
+
+FB_LINE_RE = re.compile(r"\**\s*Fundamental backdrop\s*\**:?\s*([^\n]+)", re.IGNORECASE)
+PIVOT_LINE_RE = re.compile(r"\**\s*Extreme Pivots?\s*\**:?\s*([^\n]+)", re.IGNORECASE)
+
+
+def extract_direction_summary(content):
+    """
+    The daily report's DIRECTIONAL VIEW section opens with a single combined
+    line: "**Fundamental backdrop:** X || **Extreme Pivots:** Y" (see
+    ANALYSIS_STYLE_GUIDE section 4). This pulls X and Y out separately and
+    returns the section content with that line removed, so the two values
+    can be rendered as their own quick-take badges instead of duplicated
+    inside the body text. Weekly reports (and any daily report where the
+    model didn't follow the format) simply won't match either pattern, so
+    both return values come back "" and the caller falls back to the older
+    single bullish/bearish/neutral scan via direction_color().
+    """
+    fb_match = FB_LINE_RE.search(content)
+    pivot_match = PIVOT_LINE_RE.search(content)
+    fb_value = ""
+    if fb_match:
+        fb_value = fb_match.group(1).replace("**", "").split("||")[0].strip().rstrip(". ").strip()
+    pivot_value = ""
+    if pivot_match:
+        pivot_value = pivot_match.group(1).replace("**", "").split("||")[-1].strip().rstrip(". ").strip()
+    stripped = FB_LINE_RE.sub("", content, count=1)
+    stripped = PIVOT_LINE_RE.sub("", stripped, count=1)
+    stripped = stripped.lstrip("\n").strip()
+    return fb_value, pivot_value, stripped
+
+
+def pivot_badge(pivot_value):
+    """Colors the quick-take pill from the Extreme Pivots value (WAIT/BUY/SELL)
+    rather than scanning for bullish/bearish text - that word describes the
+    Fundamental backdrop, a different value, and would mislabel the pill."""
+    v = pivot_value.upper()
+    if "SELL" in v:
+        return {"color": "#c0392b", "bg": "#fdecea", "label": "SELL", "arrow": "\u25BC", "telegram_icon": "\U0001F4C9"}
+    if "BUY" in v:
+        return {"color": "#1e8449", "bg": "#eafaf1", "label": "BUY", "arrow": "\u25B2", "telegram_icon": "\U0001F4C8"}
+    return {"color": "#b7791f", "bg": "#fef9e7", "label": "WAIT", "arrow": "\u25B6", "telegram_icon": "\u27A1\uFE0F"}
 
 
 def text_to_html(text):
@@ -557,30 +850,58 @@ def apply_extracted_actuals(events, extracted_actuals):
 
 
 def build_newsletter_html(title, subtitle, sections, raw_fallback, extra_html_before="", nav_links=None, warning_banner=None):
-    order = ["changed", "yield", "direction", "opposite", "calendar", "mind"]
+    order = ["changed", "yield", "geopolitical", "direction", "opposite", "calendar", "mind"]
     body = extra_html_before
     quick_take = ""
+    direction_content_for_body = sections.get("direction", "")
+    direction_badge = None  # computed once below, reused for both the quick-take pill and the body's colored box
 
     if not sections:
         body += f'<div style="font-family:{FONT_STACK};font-size:14px;line-height:1.6;">{text_to_html(raw_fallback)}</div>'
     else:
         if "direction" in sections:
-            c = direction_color(sections["direction"])
-            first_sentence = re.split(r"[.!?]", sections["direction"])[0].strip()
-            quick_take = (
-                '<div style="text-align:center;margin:0 0 20px 0;">'
-                f'<span style="display:inline-block;padding:10px 24px;border-radius:24px;background:{c["color"]};'
-                f'color:#fff;font-size:16px;font-weight:800;letter-spacing:1px;">{c["arrow"]} {c["label"]}</span>'
-                f'<div style="font-size:14px;color:#555;margin-top:10px;font-style:italic;max-width:480px;'
-                f'margin-left:auto;margin-right:auto;">{escape_html(first_sentence)}.</div></div>'
-                '<hr style="border:none;border-top:1px solid #eee;margin:0 0 18px 0;">'
-            )
+            fb_value, pivot_value, stripped = extract_direction_summary(sections["direction"])
+            if fb_value or pivot_value:
+                # Two-horizon daily format: a colored pill from the actionable
+                # Extreme Pivots value, plus both values spelled out below it.
+                direction_content_for_body = stripped
+                direction_badge = pivot_badge(pivot_value)
+                parts = []
+                if fb_value:
+                    parts.append(f'<strong>Fundamental backdrop:</strong> {escape_html(fb_value)}')
+                if pivot_value:
+                    parts.append(f'<strong>Extreme Pivots:</strong> {escape_html(pivot_value)}')
+                quick_take = (
+                    '<div style="text-align:center;margin:0 0 14px 0;">'
+                    f'<span style="display:inline-block;padding:7px 18px;border-radius:20px;background:{direction_badge["color"]};'
+                    f'color:#fff;font-size:12px;font-weight:bold;letter-spacing:0.8px;">{direction_badge["arrow"]} {direction_badge["label"]}</span>'
+                    '</div>'
+                    '<div style="max-width:520px;margin:0 auto 20px auto;text-align:center;font-size:14px;'
+                    'color:#333;line-height:1.6;">'
+                    + ' &nbsp;<span style="color:#bbb;">||</span>&nbsp; '.join(parts) +
+                    '</div>'
+                    '<hr style="border:none;border-top:1px solid #eee;margin:0 0 18px 0;">'
+                )
+            else:
+                # Older single-value format (weekly reports, or a daily run
+                # that didn't follow the two-value line): fall back to the
+                # original bullish/bearish/neutral text scan.
+                direction_badge = direction_color(sections["direction"])
+                first_sentence = re.split(r"[.!?]", sections["direction"])[0].strip()
+                quick_take = (
+                    '<div style="text-align:center;margin:0 0 20px 0;">'
+                    f'<span style="display:inline-block;padding:10px 24px;border-radius:24px;background:{direction_badge["color"]};'
+                    f'color:#fff;font-size:16px;font-weight:800;letter-spacing:1px;">{direction_badge["arrow"]} {direction_badge["label"]}</span>'
+                    f'<div style="font-size:14px;color:#555;margin-top:10px;font-style:italic;max-width:480px;'
+                    f'margin-left:auto;margin-right:auto;">{escape_html(first_sentence)}.</div></div>'
+                    '<hr style="border:none;border-top:1px solid #eee;margin:0 0 18px 0;">'
+                )
         for key in order:
             if key not in sections:
                 continue
-            content_html = text_to_html(sections[key])
+            content_html = text_to_html(direction_content_for_body if key == "direction" else sections[key])
             if key == "direction":
-                c = direction_color(sections[key])
+                c = direction_badge
                 body += (
                     f'<div style="margin:0 0 18px 0;border-radius:10px;background:{c["bg"]};'
                     f'border-left:5px solid {c["color"]};overflow:hidden;">'
@@ -801,6 +1122,80 @@ def format_price_context(pd_):
     return "\n".join(lines)
 
 
+OIL_SYMBOL = "USOIL"  # biquote.io's WTI crude ticker
+OIL_CHANGE_LOOKBACK_DAYS = 5
+
+
+def fetch_oil_price_data():
+    """
+    Fetches current WTI crude price and its %-change over the last
+    OIL_CHANGE_LOOKBACK_DAYS closed trading days from biquote.io, feeding the
+    GEOPOLITICAL OIL TRANSMISSION chain (see GEOPOLITICAL_OIL_FRAMEWORK) in
+    both the daily and weekly prompts. Same pattern as fetch_gold_price_data:
+    a tick for the live price, a short daily OHLC window for the lookback
+    close, both via biquote so this needs no separate provider/key.
+
+    Returns {"current_price", "past_date", "past_price", "pct_change",
+    "lookback_days"} or None if the fetch/parse fails.
+    """
+    tick = _biquote_request(f"/api/{OIL_SYMBOL}")
+    if not tick or "mid" not in tick:
+        return None
+    try:
+        current_price = float(tick["mid"])
+    except (TypeError, ValueError):
+        return None
+
+    bars = _biquote_ohlc(OIL_SYMBOL, "1d", OIL_CHANGE_LOOKBACK_DAYS + 3)
+    if not bars:
+        return None
+
+    closes = []
+    for v in bars:
+        if v.get("isOpen"):
+            continue
+        try:
+            closes.append({"date": v["openTime"][:10], "close": float(v["close"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(closes) < OIL_CHANGE_LOOKBACK_DAYS:
+        return None
+
+    # closes is newest-first (closed bars only); the Nth-back trading day is
+    # simply index [OIL_CHANGE_LOOKBACK_DAYS - 1].
+    past = closes[OIL_CHANGE_LOOKBACK_DAYS - 1]
+    pct_change = ((current_price - past["close"]) / past["close"] * 100) if past["close"] else 0.0
+    return {
+        "current_price": current_price,
+        "past_date": past["date"],
+        "past_price": past["close"],
+        "pct_change": pct_change,
+        "lookback_days": OIL_CHANGE_LOOKBACK_DAYS,
+    }
+
+
+def format_oil_context(od):
+    """
+    Turns fetch_oil_price_data()'s structured dict into the prompt text block
+    for OIL PRICE DATA AND GEOPOLITICAL CONTEXT. Degrades gracefully (matching
+    format_price_context's convention) so the model reasons qualitatively
+    from news headlines alone rather than inventing a number when oil data
+    isn't available this run.
+    """
+    if not od:
+        return (
+            "Oil price data unavailable this run - do not state any specific oil price, "
+            "percentage change, or dollar level for oil. Reason about the geopolitical/oil "
+            "transmission chain qualitatively from the news headlines only."
+        )
+    sign = "+" if od["pct_change"] >= 0 else ""
+    return (
+        f"WTI crude oil (USOIL): ${od['current_price']:,.2f} "
+        f"({sign}{od['pct_change']:.2f}% over the last {od['lookback_days']} trading days, "
+        f"vs ${od['past_price']:,.2f} on {od['past_date']}) [source: biquote.io]"
+    )
+
+
 def fetch_recent_30m_close():
     """
     Fetches the most recently CLOSED 30-minute candle for XAU/USD via
@@ -840,28 +1235,25 @@ def fetch_recent_30m_close():
 
 def fetch_latest_5m_open():
     """
-    Fetches the most recently CLOSED 5-minute candle's OPEN price for
-    XAU/USD via biquote.io, used by the price-alert watcher to check "did
-    the newest low-timeframe candle open beyond the previous 30-minute
-    candle's range".
+    Fetches the newest 5-minute candle's OPEN price for XAU/USD via
+    biquote.io, used by the price-alert watcher to check "did the newest
+    low-timeframe candle open beyond the previous 30-minute candle's range".
 
-    Reads the first bar in biquote's (newest-first) OHLC response that isn't
-    flagged isOpen (see _latest_closed_bar) - never the still-forming one.
-    Twelve Data (the previous provider here) didn't freeze a forming
-    candle's "open" the way it freezes a closed one, so reading its current
-    bar produced at least one real alert with a fabricated-looking open
-    price (reported ~13 points away from the candle's true open). biquote
-    flags this explicitly via isOpen rather than leaving it to guesswork, so
-    this only ever trusts a bar biquote itself calls closed. Worst case, an
-    alert lands up to one extra 5-minute watcher cycle late - the price in
-    it is always real, settled data either way.
+    Prefers the still-FORMING bar (isOpen: true) when biquote flags one -
+    unlike Twelve Data (the previous provider here), biquote's OHLC model
+    freezes a bar's "open" the instant the bar starts and only lets
+    high/low/close move while the bar is in progress, so reading the forming
+    bar's open is safe and gives the fastest possible alert - the entire
+    point of a 5-minute breakout watcher. Falls back to the newest CLOSED
+    bar only if none is flagged open (a defensive edge case, not the normal
+    path).
 
     Returns {"open":, "time_label":} or None.
     """
-    bars = _biquote_ohlc(GOLD_SYMBOL, "5m", 5)
+    bars = _biquote_ohlc(GOLD_SYMBOL, "5m", 3)
     if not bars:
         return None
-    bar = _latest_closed_bar(bars)
+    bar = bars[0] if bars[0].get("isOpen") else _latest_closed_bar(bars)
     if not bar:
         return None
     try:
@@ -878,22 +1270,62 @@ def fetch_latest_5m_open():
         return None
 
 
+def compute_gold_sma(period=100, interval="5m"):
+    """
+    Computes a simple moving average of the last `period` CLOSED candle
+    closes for XAU/USD, entirely from biquote OHLC data - no separate
+    technical-indicator API or key needed. (The reference implementation
+    this was ported from called Twelve Data's /sma endpoint specifically for
+    this, which would have reintroduced the Twelve Data dependency this
+    project deliberately dropped when it switched to biquote.) Used by
+    check_price_breakout_alert() as a sanity-checked dynamic stop-loss
+    level. Returns the SMA as a float, or None if fewer than `period` closed
+    bars are available.
+    """
+    bars = _biquote_ohlc(GOLD_SYMBOL, interval, period + 2)
+    if not bars:
+        return None
+    closes = []
+    for b in bars:
+        if b.get("isOpen"):
+            continue
+        try:
+            closes.append(float(b["close"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if len(closes) >= period:
+            break
+    if len(closes) < period:
+        return None
+    return sum(closes) / period
+
+
 def check_price_breakout_alert():
     """
-    The price-alert watcher's core check, run every 5 minutes by
-    calendar-watcher-style scheduling:
+    The price-alert watcher's core check, run every 5 minutes:
 
-    1. GATE: is the latest CLOSED 5-minute candle's open price inside EITHER
-       pin zone's FULL wick range (0%-100%, not just the narrow green zone) -
+    1. GATE: is the newest 5-minute candle's open price inside EITHER pin
+       zone's FULL wick range (0%-100%, not just the narrow green zone) -
        using yesterday's cached OHLC (see save_yesterday_pin_zones), no
-       fresh daily-series API call needed for this part. Deliberately reads
-       the last closed 5-minute bar rather than the still-forming one (see
-       fetch_latest_5m_open) since a forming bar's "open" isn't reliable.
-    2. TRIGGER: does that same open price break above the previous 30-minute
-       candle's high, or below its low.
-    3. DEDUP: only returns an alert once per (direction, reference 30-minute
-       candle) combination - a breakout that persists across several 5-minute
-       checks doesn't re-fire every time.
+       fresh daily-series API call needed for this part.
+    2. TRIGGER: does that same open price break above the previous
+       30-minute candle's high, or below its low.
+    3. STOP-LOSS: prefers the 100-period 5-minute SMA (see compute_gold_sma)
+       as the stop-loss level, but only if it actually sits on the
+       protective side of BOTH suggested entries below (below both for a
+       BUY, above both for a SELL) - an SMA that's drifted to the wrong
+       side would suggest a stop that's already been blown through, so
+       that's a sign to distrust it for this alert and fall back to the
+       reference 30-minute candle's opposite extreme instead.
+    4. ENTRIES: two suggested entries - a 61.8% retracement of the previous
+       30-minute candle's range back from the breakout side (a pullback
+       entry), and the breakout level itself (that candle's own high/low).
+    5. DEDUP: tracks alerted_buy/alerted_sell independently per reference
+       30-minute candle, rather than a single "last alert" key - a single
+       key can't represent both booleans at once, so a BUY firing and then
+       (rarely) a SELL firing for the SAME reference candle would overwrite
+       the stored key and let the BUY silently re-fire on the next poll. Two
+       explicit flags avoid that.
 
     Returns an alert message string if a NEW breakout is detected, or None
     (either nothing happened, or it already fired for this exact breakout).
@@ -927,17 +1359,50 @@ def check_price_breakout_alert():
     if direction is None:
         return None  # inside the previous 30-min range - no breakout
 
-    # Dedup: one alert per (direction, reference 30-min candle) combination.
+    # Dedup: independent alerted_buy/alerted_sell flags per reference 30-min candle.
     state = load_price_alert_state()
-    dedup_key = f'{candle_30m["time_label"]}:{direction}'
-    if state.get("last_key") == dedup_key:
+    bar_key = candle_30m["time_label"]
+    if state.get("bar_key") != bar_key:
+        state = {"bar_key": bar_key, "alerted_buy": False, "alerted_sell": False}
+    flag = "alerted_buy" if direction == "BUY" else "alerted_sell"
+    if state.get(flag):
         return None
-    save_price_alert_state({"last_key": dedup_key})
+    state[flag] = True
+    save_price_alert_state(state)
 
     zone_name = "UPPER" if in_upper_wick else "LOWER"
-    sl_price = prev_low if direction == "BUY" else prev_high
-    sl_desc = "below" if direction == "BUY" else "above"
+
+    prev_range = prev_high - prev_low
+    fib_618 = prev_range * 0.618
+    entry1 = (prev_high - fib_618) if direction == "BUY" else (prev_low + fib_618)
+    entry2 = prev_high if direction == "BUY" else prev_low
+
+    sma100 = compute_gold_sma()
+    sl_source = "100 SMA"
+    stop_loss = None
+    if sma100 is not None:
+        valid_for_buy = direction == "BUY" and sma100 < entry1 and sma100 < entry2
+        valid_for_sell = direction == "SELL" and sma100 > entry1 and sma100 > entry2
+        if valid_for_buy or valid_for_sell:
+            stop_loss = sma100
+        else:
+            print(
+                f"Breakout alert: 100 SMA at ${sma100:,.2f} is on the wrong side of the "
+                f"entries for a {direction} - falling back to reference-bar extreme."
+            )
+    if stop_loss is None:
+        stop_loss = prev_low if direction == "BUY" else prev_high
+        sl_source = "reference-bar extreme (100 SMA unavailable or on the wrong side)"
+
     arrow = "\U0001F4C8" if direction == "BUY" else "\U0001F4C9"
+    sl_desc = "below" if direction == "BUY" else "above"
+    entry_icon = "\U0001F7E2" if direction == "BUY" else "\U0001F534"
+    entry_label = "buy limit" if direction == "BUY" else "sell limit"
+
+    print(
+        f"Breakout alert [{sl_source}]: {direction} at ${open_price:,.2f}, entries "
+        f"${entry1:,.2f}/${entry2:,.2f}, SL ${stop_loss:,.2f}"
+    )
 
     return (
         f"{arrow} <b>Price Breakout Alert \u2014 {direction}</b>\n"
@@ -945,7 +1410,9 @@ def check_price_breakout_alert():
         f"{'above' if direction == 'BUY' else 'below'} the previous 30-minute candle's "
         f"{'high' if direction == 'BUY' else 'low'} (${prev_high if direction == 'BUY' else prev_low:,.2f}, "
         f"{candle_30m['time_label']}), while inside yesterday's {zone_name} pin bar range.\n"
-        f"Suggested stop-loss: {sl_desc} ${sl_price:,.2f}."
+        f"{entry_icon} Suggested 1st entry: ${entry1:,.2f} [{entry_label}]\n"
+        f"{entry_icon} Suggested 2nd entry: ${entry2:,.2f}\n"
+        f"\u274C Suggested stop-loss: {sl_desc} ${stop_loss:,.2f} [{sl_source}]."
     )
 
 
@@ -993,6 +1460,22 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
     radius = GREEN_ZONE_RADIUS_POINTS * point_size
     zone_mids = {"UPPER": upper_vals["50%"], "LOWER": lower_vals["50%"]}
 
+    def pivot_role(pivot_price):
+        """ROLE-FLIP RULE: a pivot above current price acts as resistance, a
+        pivot below acts as support - regardless of the zone's historical/
+        static label (e.g. price can trade below the "resistance" wick's
+        50% level, at which point a rally back up to it is a resistance
+        test, not a fall toward support). See ANALYSIS_STYLE_GUIDE section 4."""
+        return "resistance" if pivot_price > current_price else "support"
+
+    def pivot_roles_line():
+        return (
+            f"PIVOT ROLES (per current price - honour these, not a zone's static historical label): "
+            f"UPPER pin 50% (${upper_vals['50%']:,.2f}) is currently acting as "
+            f"{pivot_role(upper_vals['50%'])}; LOWER pin 50% (${lower_vals['50%']:,.2f}) is "
+            f"currently acting as {pivot_role(lower_vals['50%'])}."
+        )
+
     def describe_other_zone(primary_zone_name):
         """Describes the OPPOSITE pin zone's 50% pivot, so the trader can see both
         potential areas at once and prepare for price reaching the other side,
@@ -1032,7 +1515,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
             f"({distance_points:,.0f} points) away from the nearest edge of that zone. "
             f"Advise the trader to WAIT rather than force an entry here. The pivot level to watch "
             f"is ${pivot_price:,.2f} - once price reaches that level (entering the green zone), "
-            f"it becomes a valid entry consideration area again.\n\n" + describe_other_zone(zone_name)
+            f"it becomes a valid entry consideration area again.\n\n" + describe_other_zone(zone_name) +
+            "\n\n" + pivot_roles_line()
         )
 
     zone_fib = pd_["upper_pin_fib"] if in_zone == "UPPER" else pd_["lower_pin_fib"]
@@ -1057,6 +1541,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
         )
         lines.append("")
         lines.append(describe_other_zone(in_zone))
+        lines.append("")
+        lines.append(pivot_roles_line())
         return "\n".join(lines)
 
     candle_low = recent_30m["low"]
@@ -1085,6 +1571,8 @@ def build_pin_bar_setup_note(pd_, recent_30m, point_size=0.01):
 
     lines.append("")
     lines.append(describe_other_zone(in_zone))
+    lines.append("")
+    lines.append(pivot_roles_line())
     return "\n".join(lines)
 
 
@@ -1541,18 +2029,35 @@ def rebuild_archive_index():
 
 def build_telegram_digest(title, subtitle, sections):
     """
-    Builds a Telegram-safe message containing only the Directional View and
-    Economic Calendar & Positioning sections in full - not a link-out digest.
-    Telegram's HTML parse_mode only supports a small tag subset (b, i, u, s,
-    a, code, pre), so styling here is limited to bold labels, not the full
-    CSS/card layout of the email/web version.
+    Builds a Telegram-safe message containing the Directional View,
+    Geopolitical Oil Transmission, and Economic Calendar & Positioning
+    sections in full - not a link-out digest. Telegram's HTML parse_mode
+    only supports a small tag subset (b, i, u, s, a, code, pre), so styling
+    here is limited to bold labels, not the full CSS/card layout of the
+    email/web version.
     """
     lines = [f"<b>{escape_html(title)}</b>", escape_html(subtitle), ""]
 
     if "direction" in sections:
-        c = direction_color(sections["direction"])
-        lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {c['label']}</b>")
-        lines.append(escape_html(sections["direction"]))
+        fb_value, pivot_value, stripped = extract_direction_summary(sections["direction"])
+        if fb_value or pivot_value:
+            c = pivot_badge(pivot_value)
+            label_bits = []
+            if fb_value:
+                label_bits.append(f"Fundamental: {fb_value}")
+            if pivot_value:
+                label_bits.append(f"Extreme Pivots: {pivot_value}")
+            lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {' | '.join(label_bits)}</b>")
+            lines.append(escape_html(stripped))
+        else:
+            c = direction_color(sections["direction"])
+            lines.append(f"{c['telegram_icon']} <b>Directional View \u2014 {c['label']}</b>")
+            lines.append(escape_html(sections["direction"]))
+        lines.append("")
+
+    if "geopolitical" in sections:
+        lines.append("\U0001F30D <b>Geopolitical Oil Transmission</b>")
+        lines.append(escape_html(sections["geopolitical"]))
         lines.append("")
 
     if "calendar" in sections:
