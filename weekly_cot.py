@@ -280,7 +280,7 @@ def main():
         html_out,
     )
 
-    telegram_digest = build_telegram_digest("Weekly Gold COT Analysis", telegram_subtitle, sections)
+    telegram_digest = build_telegram_digest("Weekly Gold COT Analysis", telegram_subtitle, sections, raw_analysis=analysis)
     maybe_send_telegram(telegram_digest)
 
 
