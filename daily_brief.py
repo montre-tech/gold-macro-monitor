@@ -245,7 +245,7 @@ def main():
 
     maybe_send_email(email_subject, analysis, html_out)
 
-    telegram_digest = build_telegram_digest("Daily Gold / Macro Brief", telegram_subtitle, sections)
+    telegram_digest = build_telegram_digest("Daily Gold / Macro Brief", telegram_subtitle, sections, raw_analysis=analysis)
     maybe_send_telegram(telegram_digest)
 
 
