@@ -517,17 +517,23 @@ WEEKLY_ANALYSIS_STYLE_GUIDE = (
     "does not make that the higher-probability outcome right now.\n"
     "6. ECONOMIC CALENDAR & POSITIONING - using the WEEKLY ECONOMIC CALENDAR DATA given below, "
     "summarize the highest-impact USD/JPY releases from the PAST week (not today specifically - "
-    "this report looks back over the whole week), state whether each beat, met, or missed forecast, "
-    "and what that implies for rate-hike odds, the dollar, real yields, and gold - don't just "
-    "restate the numbers, interpret them. Then use the TREND-FINDING NEWS SEARCH block to place "
-    "this week's numbers into a MULTI-WEEK narrative - is this week's data a continuation of a "
-    "trend that has been building for months, an acceleration, or a break from it - and explain "
-    "specifically how that trend context should shape how the COT positioning read in section 1 "
-    "gets interpreted (e.g. a hawkish trend that's been building for months makes fresh long "
-    "liquidation look more like the start of a real shift than a one-week blip, or vice versa). "
-    "Treat the calendar data and the trend search as one connected argument, not two separate "
-    "topics. If either input says unavailable or empty, say so explicitly rather than inventing "
-    "a release or a trend.\n"
+    "this report looks back over the whole week). Two possible per-event cases: (a) a confirmed "
+    "actual figure - state whether it beat, met, or missed forecast and what that implies for "
+    "rate-hike odds, the dollar, real yields, and gold - don't just restate the numbers, interpret "
+    "them; (b) the data marks an event as occurred but with no actual figure confirmed from any "
+    "source - if a TARGETED HEADLINE SEARCH FOR MISSING ACTUALS block is given below, check it for "
+    "the real figure and use it if a headline clearly states one; otherwise still mention that the "
+    "event occurred and say its outcome isn't confirmed, rather than omitting it or inventing a "
+    "number. Do NOT report zero releases for the week just because some figures are unconfirmed - "
+    "an occurred-but-unconfirmed event is still real context, not something to skip. Then use the "
+    "TREND-FINDING NEWS SEARCH block to place this week's numbers into a MULTI-WEEK narrative - is "
+    "this week's data a continuation of a trend that has been building for months, an acceleration, "
+    "or a break from it - and explain specifically how that trend context should shape how the COT "
+    "positioning read in section 1 gets interpreted (e.g. a hawkish trend that's been building for "
+    "months makes fresh long liquidation look more like the start of a real shift than a one-week "
+    "blip, or vice versa). Treat the calendar data and the trend search as one connected argument, "
+    "not two separate topics. If the calendar data says unavailable or empty, say so explicitly "
+    "rather than inventing a release or a trend.\n"
     "7. WHAT WOULD CHANGE MY MIND - the specific data point, COT shift, or event next week that "
     "would actually flip the view.\n"
     "Keep the whole thing under 550 words. Be decisive but honest about uncertainty - do not hedge "
@@ -535,7 +541,15 @@ WEEKLY_ANALYSIS_STYLE_GUIDE = (
     "not investment advice, and you can note that briefly at the end.\n\n"
     "CRITICAL PRICE RULE: only reference the exact oil price/percentage change given in OIL PRICE "
     "DATA if provided - never invent one. If that section says unavailable, do not state any "
-    "specific oil price at all."
+    "specific oil price at all.\n\n"
+    "AFTER completing all seven sections above, if a TARGETED HEADLINE SEARCH FOR MISSING ACTUALS "
+    "block was provided, append one line per event listed in it, in EXACTLY this format so the "
+    "figure can be captured programmatically for the archive:\n"
+    "EXTRACTED_ACTUAL: <exact event title as given> = <value>\n"
+    "Only extract a value if a headline clearly and specifically states the actual reported figure "
+    "for that exact event. If uncertain, ambiguous, or no headline mentions a figure, write UNKNOWN "
+    "as the value - do not guess a plausible-sounding number. These lines are for data capture only "
+    "and will not be shown to the reader."
 )
 
 SECTION_HEADERS = [
@@ -1850,21 +1864,37 @@ def format_calendar_context(events, is_fallback=False, events_date_label=None):
 def format_weekly_calendar_summary(raw_events):
     """
     Summarizes a week's worth of already-fetched Medium/High-impact USD/JPY
-    calendar events (with any MQL5 backfill already applied) for the weekly
-    COT report - a flat past-week recap sorted chronologically, not the
-    today/upcoming split the daily report uses, since by the time the weekly
-    report runs (Saturday) the whole week's data has already occurred.
-    Confirmed-actual events only, consistent with the daily report no longer
-    showing unconfirmed "no actual" placeholders either.
+    calendar events (with any MQL5 backfill AND targeted-headline backfill
+    already applied) for the weekly COT report - a flat past-week recap
+    sorted chronologically, not the today/upcoming split the daily report
+    uses, since by the time the weekly report runs (Saturday) the whole
+    week's data has already occurred.
+
+    Includes confirmed-actual events AND any event that's still stuck as
+    released_no_actual after both backfill passes - these DID happen (their
+    scheduled time has passed), so omitting them entirely would understate
+    what the week actually contained. By Saturday, MQL5's live calendar
+    scrape can no longer see most of Monday-Friday's events (it only
+    reflects near-current dates), so without listing the no-actual ones too,
+    a week that genuinely had several releases can end up reporting zero -
+    which is exactly the bug this fixed.
     """
     if raw_events is None:
         return "Weekly economic calendar data unavailable this run - do not invent any releases."
-    confirmed = [e for e in raw_events if e["status"] == "released"]
-    if not confirmed:
-        return "No confirmed Medium/High-impact USD or JPY releases found for this week."
+    relevant = [e for e in raw_events if e["status"] in ("released", "released_no_actual")]
+    if not relevant:
+        return "No Medium/High-impact USD or JPY releases occurred this week."
 
-    lines = [f"(All times in {DISPLAY_TZ_LABEL}. Confirmed releases only, sorted by date/time.)"]
-    for e in sorted(confirmed, key=lambda x: (x["event_date"], x["time_label"])):
+    lines = [f"(All times in {DISPLAY_TZ_LABEL}, sorted by date/time.)"]
+    for e in sorted(relevant, key=lambda x: (x["event_date"], x["time_label"])):
+        if e["status"] == "released_no_actual":
+            lines.append(
+                f"  - [{e['time_label']}] [{e['country']}, {e['impact']} impact] {e['title']} - "
+                f"THIS EVENT OCCURRED but no actual figure could be confirmed from any source "
+                f"this run. Forecast: {e['forecast']} | Previous: {e['previous']}. Mention it as a "
+                f"release that happened, without inventing a number for it."
+            )
+            continue
         source_note = ""
         if e.get("actual_source") == "mql5":
             source_note = " (via MQL5 calendar, not the FF feed)"
@@ -2190,6 +2220,56 @@ def apply_mql5_actuals(events, mql5_data):
             e["status"] = "released"
             e["actual_source"] = "mql5"
     return events
+
+
+COUNTRY_SEARCH_NAMES = {"USD": "US", "JPY": "Japan"}
+
+
+def fetch_targeted_headlines_for_missing_actuals(calendar_events, max_events=5):
+    """
+    For any Medium/High-impact event whose actual figure isn't confirmed yet
+    (status == "released_no_actual" - its scheduled time has passed but
+    neither the FF feed nor an MQL5 backfill populated a number), runs a
+    targeted news search specifically for that event's result. Major
+    indicators almost always get their actual figure reported in financial
+    news headlines within minutes of release - a more reliable channel for
+    this specific gap than either calendar feed, which we've confirmed (via
+    two separate providers) doesn't populate actuals reliably for every
+    event.
+
+    Shared by both daily_brief.py (same-day events) and weekly_cot.py (a
+    full week's worth, most of which MQL5's live-calendar scrape can no
+    longer see by the time the weekly report runs) - this is the fallback
+    that actually recovers those numbers in both cases, not just daily's.
+    """
+    if not calendar_events:
+        return ""
+
+    missing = [e for e in calendar_events if e.get("status") == "released_no_actual"]
+    if not missing:
+        return ""
+
+    searched = missing[:max_events]
+    skipped = missing[max_events:]
+    print(
+        f"Targeted headline search: {len(missing)} event(s) missing an actual, "
+        f"searching {len(searched)} (cap={max_events}), skipping {len(skipped)} due to the cap."
+    )
+    if skipped:
+        print(f"Skipped due to cap: {[e['title'] for e in skipped]}")
+
+    blocks = []
+    for e in searched:
+        country_name = COUNTRY_SEARCH_NAMES.get(e["country"], e["country"])
+        query = f'{country_name} {e["title"]} actual result'
+        headlines = fetch_news(query, max_items=4)
+        headline_count = len(headlines.splitlines()) if headlines else 0
+        print(f'Targeted search "{query}" -> {headline_count} headline(s) found.')
+        blocks.append(
+            f'Search for "{e["title"]}" ({e["country"]}):\n' +
+            (headlines or "  (no relevant headlines found)")
+        )
+    return "\n\n".join(blocks)
 
 
 def maybe_send_email(subject, plain_text, html_body):
