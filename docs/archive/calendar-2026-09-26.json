@@ -1,0 +1,71 @@
+{
+  "date": "Sep 26, 2026",
+  "events": [
+    {
+      "title": "President Trump Speaks",
+      "country": "USD",
+      "event_date": "2026-09-22",
+      "time_label": "Sep 22, 16:55 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Unemployment Claims",
+      "country": "USD",
+      "event_date": "2026-09-24",
+      "time_label": "Sep 24, 15:30 GMT+3",
+      "impact": "Medium",
+      "forecast": "201K",
+      "previous": "196K",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "President Trump Speaks",
+      "country": "USD",
+      "event_date": "2026-09-24",
+      "time_label": "Sep 24, 17:15 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "President Trump Speaks",
+      "country": "USD",
+      "event_date": "2026-09-25",
+      "time_label": "Sep 25, 02:55 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "n/a",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Revised UoM Consumer Sentiment",
+      "country": "USD",
+      "event_date": "2026-09-25",
+      "time_label": "Sep 25, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "47.4",
+      "previous": "47.8",
+      "actual": null,
+      "status": "released_no_actual"
+    },
+    {
+      "title": "Revised UoM Inflation Expectations",
+      "country": "USD",
+      "event_date": "2026-09-25",
+      "time_label": "Sep 25, 17:00 GMT+3",
+      "impact": "Medium",
+      "forecast": "n/a",
+      "previous": "4.6%",
+      "actual": null,
+      "status": "released_no_actual"
+    }
+  ]
+}
