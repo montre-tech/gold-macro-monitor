@@ -38,6 +38,7 @@ from lib import (
     format_calendar_context,
     fetch_mql5_calendar_actuals,
     apply_mql5_actuals,
+    fetch_targeted_headlines_for_missing_actuals,
     extract_and_strip_actuals,
     apply_extracted_actuals,
     load_last_analysis,
@@ -56,49 +57,6 @@ NEWS_QUERIES = [
     "oil price WTI Brent inflation",
     "geopolitical tensions gold safe haven",
 ]
-
-
-COUNTRY_SEARCH_NAMES = {"USD": "US", "JPY": "Japan"}
-
-
-def fetch_targeted_headlines_for_missing_actuals(calendar_events, max_events=5):
-    """
-    For any Medium/High-impact event whose actual figure the calendar feed
-    didn't provide (status == released_no_actual), runs a targeted news
-    search specifically for that event's result. Major indicators almost
-    always get their actual figure reported in financial news headlines
-    within minutes of release - a more reliable channel for this specific
-    gap than free calendar aggregator feeds, which we've now confirmed (via
-    two separate providers) don't populate actuals reliably for every event.
-    """
-    if not calendar_events:
-        return ""
-
-    missing = [e for e in calendar_events if e.get("status") == "released_no_actual"]
-    if not missing:
-        return ""
-
-    searched = missing[:max_events]
-    skipped = missing[max_events:]
-    print(
-        f"Targeted headline search: {len(missing)} event(s) missing an actual, "
-        f"searching {len(searched)} (cap={max_events}), skipping {len(skipped)} due to the cap."
-    )
-    if skipped:
-        print(f"Skipped due to cap: {[e['title'] for e in skipped]}")
-
-    blocks = []
-    for e in searched:
-        country_name = COUNTRY_SEARCH_NAMES.get(e["country"], e["country"])
-        query = f'{country_name} {e["title"]} actual result'
-        headlines = fetch_news(query, max_items=4)
-        headline_count = len(headlines.splitlines()) if headlines else 0
-        print(f'Targeted search "{query}" -> {headline_count} headline(s) found.')
-        blocks.append(
-            f'Search for "{e["title"]}" ({e["country"]}):\n' +
-            (headlines or "  (no relevant headlines found)")
-        )
-    return "\n\n".join(blocks)
 
 
 def main():
