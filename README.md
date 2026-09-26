@@ -32,6 +32,12 @@ Actions is free for public repos, and Gemini's free tier needs no credit card.
      [App Password](https://myaccount.google.com/apppasswords) (not your normal
      password) for `EMAIL_PASS`. If you skip these, the script just publishes to
      GitHub Pages and skips email — nothing breaks.
+   - `EMAIL_FROM_NAME` (optional) — the display name shown in front of the
+     address in your inbox, e.g. set it to `GHub Alert` so emails show up as
+     "GHub Alert <you@gmail.com>" instead of just the bare address. Defaults
+     to "GHub Alert" if not set. The address itself is always your
+     `EMAIL_USER` — Gmail doesn't allow sending from a different address, but
+     the display name in front of it is free text.
 
    Gold price/candle data comes from [biquote.io](https://biquote.io) — free,
    no key or signup needed, so there's nothing to add for that part to work.
