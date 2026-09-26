@@ -17,6 +17,8 @@ from lib import (
     is_gemini_error,
     parse_sections,
     strip_section_refs,
+    extract_and_strip_actuals,
+    apply_extracted_actuals,
     build_newsletter_html,
     build_telegram_digest,
     maybe_send_telegram,
@@ -28,6 +30,7 @@ from lib import (
     fetch_raw_calendar_events,
     fetch_mql5_calendar_actuals,
     apply_mql5_actuals,
+    fetch_targeted_headlines_for_missing_actuals,
     format_weekly_calendar_summary,
     load_last_weekly_analysis,
     save_last_weekly_analysis,
@@ -146,6 +149,16 @@ def main():
     weekly_calendar_events = fetch_raw_calendar_events()
     mql5_actuals = fetch_mql5_calendar_actuals()
     weekly_calendar_events = apply_mql5_actuals(weekly_calendar_events, mql5_actuals)
+    # By Saturday, MQL5's live-calendar scrape above can no longer see most of
+    # Monday-Friday's events (it only reflects near-current dates), so a full
+    # week typically still has several released_no_actual events left even
+    # after that backfill - this targeted search is what actually recovers
+    # most of them. Capped higher than daily's default (a week has more
+    # events than a single day) but still bounded to avoid an unbounded
+    # number of news searches on a very busy week.
+    weekly_targeted_headlines_block = fetch_targeted_headlines_for_missing_actuals(
+        weekly_calendar_events, max_events=15
+    )
     weekly_calendar_block = format_weekly_calendar_summary(weekly_calendar_events)
 
     oil_data = fetch_oil_price_data()
@@ -164,9 +177,19 @@ def main():
         "the GEOPOLITICAL OIL TRANSMISSION CHAIN internally and produce only the two-sentence "
         "synthesis):\n" +
         oil_block +
-        "\n\nWEEKLY ECONOMIC CALENDAR DATA (confirmed releases from this specific week - see "
-        "instructions in ECONOMIC CALENDAR & POSITIONING above for how to use this):\n" +
+        "\n\nWEEKLY ECONOMIC CALENDAR DATA (confirmed AND occurred-but-unconfirmed releases from "
+        "this specific week - see instructions in ECONOMIC CALENDAR & POSITIONING above for how to "
+        "use this):\n" +
         weekly_calendar_block +
+        (
+            "\n\nTARGETED HEADLINE SEARCH FOR MISSING ACTUALS (the calendar data above marked "
+            "these events' actual figures as not confirmed by either the calendar feed or the MQL5 "
+            "backfill - these are dedicated news searches for each one specifically. If a headline "
+            "states the real figure, use it and note it came from news coverage. If none of these "
+            "mention a figure either, say the outcome is not confirmed rather than inventing one):\n"
+            + weekly_targeted_headlines_block
+            if weekly_targeted_headlines_block else ""
+        ) +
         "\n\nTREND-FINDING NEWS SEARCH (use this to establish the MULTI-WEEK narrative behind this "
         "week's isolated data points - e.g. has inflation been trending in one direction for several "
         "months, has Fed/BOJ tone been building in a direction, what are analysts saying about the "
@@ -201,8 +224,17 @@ def main():
             print("No cached weekly report available to fall back to - skipping publish entirely this run.")
             return
     else:
-        analysis = strip_section_refs(analysis_raw)
+        analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
+        analysis = strip_section_refs(analysis)
         sections = parse_sections(analysis)
+
+        # Backfill any actual figures the model found in news headlines back into
+        # the calendar data, same pattern as daily_brief.py - weekly_calendar_events
+        # and raw_calendar (used for the archive) share the same dict objects, so
+        # this mutation is visible wherever weekly_calendar_events is referenced.
+        weekly_calendar_events = apply_extracted_actuals(weekly_calendar_events, extracted_actuals)
+        weekly_calendar_block = format_weekly_calendar_summary(weekly_calendar_events)
+
         save_last_weekly_analysis(latest["date"], analysis, extra={
             "page_subtitle": page_subtitle,
             "data_summary": data_summary,
