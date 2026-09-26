@@ -13,6 +13,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 
 import requests
 
@@ -2343,21 +2344,32 @@ def fetch_targeted_headlines_for_missing_actuals(calendar_events, max_events=5):
 
 
 def maybe_send_email(subject, plain_text, html_body):
-    """Sends via Gmail SMTP if EMAIL_USER/EMAIL_PASS secrets are set; otherwise skips
-    quietly, since publishing to GitHub Pages is enough on its own."""
+    """
+    Sends via Gmail SMTP if EMAIL_USER/EMAIL_PASS secrets are set; otherwise
+    skips quietly, since publishing to GitHub Pages is enough on its own.
+
+    The From header shows a display name in front of the address (e.g.
+    "GHub Alert <you@gmail.com>") rather than the bare address, so it's
+    recognizable in an inbox at a glance as coming from this GitHub Action
+    rather than looking like a plain personal email. The display name is
+    read from the optional EMAIL_FROM_NAME secret (defaults to "GHub Alert"
+    if not set) - Gmail only allows the ADDRESS part to be the authenticated
+    account, but the display name in front of it is free text.
+    """
     user = os.environ.get("EMAIL_USER")
     password = os.environ.get("EMAIL_PASS")
     to_addr = os.environ.get("EMAIL_TO", user)
+    from_name = os.environ.get("EMAIL_FROM_NAME", "GHub Alert")
     if not user or not password:
         print("EMAIL_USER/EMAIL_PASS not set - skipping email, published to GitHub Pages only.")
         return
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = user
+    msg["From"] = formataddr((from_name, user))
     msg["To"] = to_addr
     msg.attach(MIMEText(plain_text, "plain"))
     msg.attach(MIMEText(html_body, "html"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(user, password)
         server.sendmail(user, [to_addr], msg.as_string())
-    print("Email sent to", to_addr)
+    print("Email sent to", to_addr, "from", msg["From"])
