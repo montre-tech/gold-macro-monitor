@@ -11,16 +11,20 @@ import requests
 
 from lib import (
     CARRY_TRADE_FRAMEWORK,
+    GEOPOLITICAL_OIL_FRAMEWORK,
     WEEKLY_ANALYSIS_STYLE_GUIDE,
     ask_llm,
     is_gemini_error,
     parse_sections,
+    strip_section_refs,
     build_newsletter_html,
     build_telegram_digest,
     maybe_send_telegram,
     escape_html,
     maybe_send_email,
     fetch_news,
+    fetch_oil_price_data,
+    format_oil_context,
     fetch_raw_calendar_events,
     fetch_mql5_calendar_actuals,
     apply_mql5_actuals,
@@ -144,15 +148,22 @@ def main():
     weekly_calendar_events = apply_mql5_actuals(weekly_calendar_events, mql5_actuals)
     weekly_calendar_block = format_weekly_calendar_summary(weekly_calendar_events)
 
+    oil_data = fetch_oil_price_data()
+    oil_block = format_oil_context(oil_data)
+
     trend_news_block = ""
     for q in WEEKLY_TREND_QUERIES:
         trend_news_block += f'\n\nSearch: "{q}"\n{fetch_news(q, max_items=5)}'
 
     prompt = (
-        CARRY_TRADE_FRAMEWORK + "\n\n" + WEEKLY_ANALYSIS_STYLE_GUIDE +
+        CARRY_TRADE_FRAMEWORK + "\n\n" + GEOPOLITICAL_OIL_FRAMEWORK + "\n\n" + WEEKLY_ANALYSIS_STYLE_GUIDE +
         "\n\nHere is the CFTC Commitments of Traders trend data for COMEX Gold you need to "
         "analyze. Pay close attention to the precomputed asymmetry note - it tells you whether a "
         "net-position drop reflects genuine reversal risk or just profit-taking:\n\n" + data_summary +
+        "\n\nOIL PRICE DATA AND GEOPOLITICAL CONTEXT (you MUST walk through all five layers of "
+        "the GEOPOLITICAL OIL TRANSMISSION CHAIN internally and produce only the two-sentence "
+        "synthesis):\n" +
+        oil_block +
         "\n\nWEEKLY ECONOMIC CALENDAR DATA (confirmed releases from this specific week - see "
         "instructions in ECONOMIC CALENDAR & POSITIONING above for how to use this):\n" +
         weekly_calendar_block +
@@ -160,7 +171,9 @@ def main():
         "week's isolated data points - e.g. has inflation been trending in one direction for several "
         "months, has Fed/BOJ tone been building in a direction, what are analysts saying about the "
         "trajectory rather than just this week's print - and explicitly tie that trend into how it "
-        "likely affects the COT positioning read above, not as a separate disconnected topic):" +
+        "likely affects the COT positioning read above, not as a separate disconnected topic. Use "
+        "the oil/geopolitical headlines specifically to classify the shock in LAYER 1 of the "
+        "transmission chain above):" +
         trend_news_block
     )
 
@@ -188,7 +201,7 @@ def main():
             print("No cached weekly report available to fall back to - skipping publish entirely this run.")
             return
     else:
-        analysis = analysis_raw
+        analysis = strip_section_refs(analysis_raw)
         sections = parse_sections(analysis)
         save_last_weekly_analysis(latest["date"], analysis, extra={
             "page_subtitle": page_subtitle,
