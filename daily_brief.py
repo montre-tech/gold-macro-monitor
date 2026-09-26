@@ -10,10 +10,17 @@ import os
 
 from lib import (
     CARRY_TRADE_FRAMEWORK,
+    GEOPOLITICAL_OIL_FRAMEWORK,
     ANALYSIS_STYLE_GUIDE,
     ask_llm,
     is_gemini_error,
     parse_sections,
+    strip_section_refs,
+    extract_net_implications,
+    save_last_nets,
+    build_nets_consistency_block,
+    save_last_invalidation,
+    build_invalidation_consistency_block,
     build_newsletter_html,
     build_telegram_digest,
     maybe_send_telegram,
@@ -24,6 +31,8 @@ from lib import (
     save_yesterday_pin_zones,
     fetch_recent_30m_close,
     build_pin_bar_setup_note,
+    fetch_oil_price_data,
+    format_oil_context,
     fetch_raw_calendar_events,
     select_todays_or_recent_from,
     format_calendar_context,
@@ -126,8 +135,13 @@ def main():
     else:
         yesterday_block = "No prior day's analysis available (first run, or state file missing)."
 
+    oil_data = fetch_oil_price_data()
+    oil_block = format_oil_context(oil_data)
+    nets_consistency_block = build_nets_consistency_block()
+    invalidation_consistency_block = build_invalidation_consistency_block()
+
     prompt = (
-        CARRY_TRADE_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
+        CARRY_TRADE_FRAMEWORK + "\n\n" + GEOPOLITICAL_OIL_FRAMEWORK + "\n\n" + ANALYSIS_STYLE_GUIDE +
         "\n\nYESTERDAY'S ANALYSIS (for continuity - see instructions in WHAT CHANGED above for "
         "how to use this):\n" +
         yesterday_block +
@@ -136,8 +150,12 @@ def main():
         "\n\nPIN-BAR LEVEL SETUP CHECK (a specific, already-decided trading rule - see "
         "instructions in DIRECTIONAL VIEW above for how to use this):\n" +
         setup_note +
-        "\n\nECONOMIC CALENDAR DATA (see instructions in ECONOMIC CALENDAR & POSITIONING "
-        "above for how to use this):\n" +
+        "\n\nOIL PRICE DATA AND GEOPOLITICAL CONTEXT (you MUST walk through all five layers of "
+        "the GEOPOLITICAL OIL TRANSMISSION CHAIN internally and produce only the two-sentence "
+        "synthesis):\n" +
+        oil_block +
+        "\n\nECONOMIC CALENDAR DATA (see instructions in WHAT CHANGED above for how to use this "
+        "- quote any Actual figure directly from here, do not approximate):\n" +
         calendar_block +
         (
             "\n\nTARGETED HEADLINE SEARCH FOR MISSING ACTUALS (the calendar feed above marked "
@@ -148,8 +166,12 @@ def main():
             if targeted_headlines_block else ""
         ) +
         "\n\nHere are today's raw headline pulls on Fed policy, BOJ/yen intervention, "
-        "gold, and rate-hike odds coverage. Some headlines may be repetitive or low-value - "
-        "ignore those and focus on what is actually new or market-moving:" + news_block
+        "gold, rate-hike odds, and oil/geopolitical coverage. Some headlines may be repetitive or "
+        "low-value - ignore those and focus on what is actually new or market-moving. Use the "
+        "oil/geopolitical headlines specifically to classify the shock in LAYER 1 of the chain:" +
+        news_block +
+        nets_consistency_block +
+        invalidation_consistency_block
     )
 
     analysis_raw = ask_llm(prompt)
@@ -185,6 +207,7 @@ def main():
             return
     else:
         analysis, extracted_actuals = extract_and_strip_actuals(analysis_raw)
+        analysis = strip_section_refs(analysis)
         sections = parse_sections(analysis)
 
         # Backfill any actual figures the model found in news headlines back into the
@@ -201,6 +224,17 @@ def main():
             "setup_note": setup_note,
             "calendar_block": calendar_block,
         })
+
+        # Cross-run consistency guardrails - only persisted on a genuine fresh
+        # analysis, same rule as save_last_analysis above, so a cached/fallback
+        # run never overwrites these with a stale replay of yesterday's values.
+        nets = extract_net_implications(analysis)
+        if len(nets) >= 3:
+            save_last_nets(nets, date_str)
+        else:
+            print(f"Only found {len(nets)}/3 'Net implication' lines this run - skipping nets-consistency save.")
+        if sections.get("mind"):
+            save_last_invalidation(sections["mind"], date_str)
 
     data_box_html = ""
     if price_data or warning_banner:
